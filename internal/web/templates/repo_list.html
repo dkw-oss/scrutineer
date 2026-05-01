@@ -1,4 +1,4 @@
-<div id="repos" hx-get="/repositories?q={{.Q}}&page={{.Page.N}}&language={{.Language}}&sort={{.Sort}}" hx-trigger="every 5s" hx-target="this" hx-select="#repos" hx-swap="outerHTML">
+<div id="repos" hx-get="/repositories?q={{.Q}}&page={{.Page.N}}&language={{.Language}}&sort={{.Sort}}" hx-trigger="every 5s[document.visibilityState==='visible']" hx-target="this" hx-select="#repos" hx-swap="outerHTML">
 <div class="flex items-center justify-end gap-2 mb-4">
   <form method="get" action="/" class="inline-flex">
     <input class="input" type="search" name="q" value="{{.Q}}" placeholder="Search repositories"
