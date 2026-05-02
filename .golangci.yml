@@ -12,6 +12,9 @@ linters:
     - ireturn
     - goconst
     - errcheck
+  settings:
+    goconst:
+      min-occurrences: 5
 
 formatters:
   enable:
