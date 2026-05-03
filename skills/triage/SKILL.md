@@ -34,7 +34,9 @@ A docs repo (markdown only) has neither. An infrastructure repo (terraform, helm
 
 ## The scan set
 
-Before enqueueing anything, check what already ran so a re-trigger is idempotent: `GET {api_base}/repositories/{repository_id}/scans` returns every scan on this repository with `skill_name` and `status`. Build a set of skill names with `status="done"` or `status="running"` and skip those.
+Before enqueueing anything, check what already ran so a re-trigger does not double-enqueue work that is already current.
+
+Get the commit you are running at: `git -C ./src rev-parse HEAD`. Then fetch `GET {api_base}/repositories/{repository_id}/scans`, which returns every scan on this repository with `skill_name`, `status`, and `commit`. Build a set of skill names to skip: a skill goes in the skip set if it has a scan with `status="running"`, or a scan with `status="done"` whose `commit` equals the current HEAD. A `done` scan at any other commit does not count; the repository has moved since then and the skill should run again.
 
 For every remaining skill in the list below, enqueue it: `POST {api_base}/repositories/{id}/skills/{name}/run` with an `Authorization: Bearer {token}` header. Order does not matter; the scrutineer worker runs them as they come in.
 
@@ -80,7 +82,7 @@ Write `./report.json` as:
 }
 ```
 
-`gated` lists skills that were not enqueued because `has_code` or `has_packages` was false. `already_done` holds skills that were skipped because a done/running scan was already present. `skipped` is for skills that came back `404 skill not found or inactive`. `brief` is the subset of brief's output the gates were derived from, so an operator can see why a repo got the short treatment and re-run triage manually if the classification was wrong.
+`gated` lists skills that were not enqueued because `has_code` or `has_packages` was false. `already_done` holds skills that were skipped because a scan is currently running or already completed at this commit. `skipped` is for skills that came back `404 skill not found or inactive`. `brief` is the subset of brief's output the gates were derived from, so an operator can see why a repo got the short treatment and re-run triage manually if the classification was wrong.
 
 Do not wait for any of the scans to finish. The API returns a scan id immediately; your job is to fire them off and exit.
 
