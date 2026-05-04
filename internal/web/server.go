@@ -1637,7 +1637,11 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 	if err := s.DB.Create(&scan).Error; err != nil {
 		return 0, err
 	}
-	if err := s.Queue.Enqueue(ctx, worker.JobSkill, scan.ID, worker.PrioScan); err != nil {
+	prio := worker.PrioScan
+	if opts.FindingID != nil {
+		prio = worker.PrioFinding
+	}
+	if err := s.Queue.Enqueue(ctx, worker.JobSkill, scan.ID, prio); err != nil {
 		return 0, err
 	}
 	s.DB.Model(&db.Repository{}).Where("id = ?", repoID).Update("updated_at", time.Now())

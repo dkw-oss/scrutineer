@@ -1258,6 +1258,47 @@ func TestFindingPatchRunEnqueuesPatchSkill(t *testing.T) {
 	}
 }
 
+func TestEnqueueSkillWith_findingScopedJumpsQueue(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	repo := db.Repository{URL: "https://github.com/foo/bar", Name: "bar"}
+	s.DB.Create(&repo)
+	prior := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone}
+	s.DB.Create(&prior)
+	skill := db.Skill{Name: "verify", Body: "b", OutputFile: "r.json", OutputKind: "freeform", Version: 1, Active: true, Source: "ui"}
+	s.DB.Create(&skill)
+	finding := db.Finding{ScanID: prior.ID, RepositoryID: repo.ID, FindingID: "F1", Title: "x", Severity: "High"}
+	s.DB.Create(&finding)
+
+	if _, err := s.enqueueSkillWith(context.Background(), repo.ID, skill.ID, ScanOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.enqueueSkillWith(context.Background(), repo.ID, skill.ID, ScanOpts{FindingID: &finding.ID}); err != nil {
+		t.Fatal(err)
+	}
+
+	sqldb, _ := s.DB.DB()
+	rows, err := sqldb.Query("SELECT priority FROM goqite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var got []int
+	for rows.Next() {
+		var p int
+		if err := rows.Scan(&p); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, p)
+	}
+	sort.Ints(got)
+	want := []int{worker.PrioScan, worker.PrioFinding}
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("queue priorities = %v, want %v", got, want)
+	}
+}
+
 func TestFindingPatchDownload(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()

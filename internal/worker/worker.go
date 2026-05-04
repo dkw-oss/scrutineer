@@ -23,6 +23,7 @@ const (
 	JobSkill = "skill"
 
 	PrioScan     = 0
+	PrioFinding  = 2
 	PrioTool     = 5
 	PrioFastTool = 8
 	PrioMetadata = 10
