@@ -2022,6 +2022,63 @@ func TestNavKey_settings(t *testing.T) {
 	}
 }
 
+func TestScanShowSkillLink(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	repo := db.Repository{URL: "u", Name: "n"}
+	s.DB.Create(&repo)
+	skill := db.Skill{Name: "security-deep-dive", Description: "d"}
+	s.DB.Create(&skill)
+
+	skillID := skill.ID
+	scan := db.Scan{
+		RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone,
+		SkillID: &skillID, SkillName: "security-deep-dive",
+	}
+	s.DB.Create(&scan)
+
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, localReq("GET", fmt.Sprintf("/scans/%d", scan.ID)))
+	if w.Code != 200 {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+	body := w.Body.String()
+	wantLink := fmt.Sprintf(`/skills/%d`, skillID)
+	if !strings.Contains(body, wantLink) {
+		t.Errorf("scan show page missing skill link %q", wantLink)
+	}
+	if !strings.Contains(body, "security-deep-dive") {
+		t.Errorf("scan show page missing skill name")
+	}
+}
+
+func TestScanShowSkillNameWithoutID(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	repo := db.Repository{URL: "u", Name: "n"}
+	s.DB.Create(&repo)
+	scan := db.Scan{
+		RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone,
+		SkillName: "deleted-skill",
+	}
+	s.DB.Create(&scan)
+
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, localReq("GET", fmt.Sprintf("/scans/%d", scan.ID)))
+	if w.Code != 200 {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "deleted-skill") {
+		t.Errorf("scan show page missing skill name for deleted skill")
+	}
+	if strings.Contains(body, `/skills/0`) {
+		t.Errorf("scan show page should not link to skill when SkillID is nil")
+	}
+}
+
 func TestMaintainerShow_displaysFindingStatus(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()
