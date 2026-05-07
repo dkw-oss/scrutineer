@@ -80,4 +80,4 @@ Write `./report.json` conforming to `./schema.json`.
 - `ruled_out[]` — every candidate you did not promote to a finding, with `step` 1/2/3 matching the section above where it fell out and a one-line `reason`.
 - `boundaries[]` — the application's actors (anonymous web user, authenticated user, admin, background job feeder) as you found them while tracing.
 
-Set `spec_version` to `11`. Use the repository URL and HEAD commit of `./src` for `repository` and `commit`.
+Set `spec_version` to `12`. Use the repository URL and HEAD commit of `./src` for `repository` and `commit`.

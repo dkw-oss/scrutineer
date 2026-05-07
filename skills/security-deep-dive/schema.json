@@ -71,7 +71,8 @@
         "Concurrency",
         "Resource consumption",
         "Reflection",
-        "Round-trip integrity"
+        "Round-trip integrity",
+        "Agentic"
       ]
     },
     "sink_id":    { "type": "string", "pattern": "^S[0-9]+$" },
