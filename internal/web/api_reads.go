@@ -230,6 +230,8 @@ func findingSummary(f db.Finding) map[string]any {
 		"cwe":           f.CWE,
 		"location":      f.Location,
 		"affected":      f.Affected,
+		"reachability":  f.Reachability,
+		"quality_tier":  f.QualityTier,
 		"cve_id":        f.CVEID,
 		"cvss_vector":   f.CVSSVector,
 		"cvss_score":    f.CVSSScore,

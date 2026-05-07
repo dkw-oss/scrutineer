@@ -58,6 +58,10 @@ func findingFieldAccessor(f *Finding, field string) (current, column string, err
 		return f.Location, "location", nil
 	case "affected":
 		return f.Affected, "affected", nil
+	case "reachability":
+		return f.Reachability, "reachability", nil
+	case "quality_tier":
+		return f.QualityTier, "quality_tier", nil
 	case "cve_id":
 		return f.CVEID, "cve_id", nil
 	case "cvss_vector":

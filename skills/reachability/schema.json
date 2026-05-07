@@ -79,6 +79,14 @@
     "step":       { "type": "integer", "minimum": 1, "maximum": 6 },
     "cwe":        { "type": "string", "pattern": "^CWE-[0-9]+$" },
     "trusted":    { "type": "string", "enum": ["yes", "no", "conditional"] },
+    "reachability": {
+      "type": "string",
+      "enum": ["reachable", "harness_only", "unclear"]
+    },
+    "quality_tier": {
+      "type": "string",
+      "enum": ["high", "low"]
+    },
 
     "boundary": {
       "type": "object",
@@ -121,6 +129,7 @@
       "type": "object",
       "required": [
         "id", "sinks", "title", "severity", "cwe", "location",
+        "reachability", "quality_tier",
         "trace", "boundary", "validation", "rating"
       ],
       "additionalProperties": false,
@@ -132,6 +141,8 @@
         "cwe":           { "$ref": "#/$defs/cwe" },
         "location":      { "type": "string" },
         "affected":      { "type": "string" },
+        "reachability":  { "$ref": "#/$defs/reachability" },
+        "quality_tier":  { "$ref": "#/$defs/quality_tier" },
         "reach_checked": { "type": "integer", "minimum": 0 },
         "reach_exposed": { "type": "integer", "minimum": 0 },
         "trace":      { "$ref": "#/$defs/markdown" },

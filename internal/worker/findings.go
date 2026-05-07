@@ -37,6 +37,8 @@ type scanFinding struct {
 	CWE          string   `json:"cwe"`
 	Location     string   `json:"location"`
 	Affected     string   `json:"affected"`
+	Reachability string   `json:"reachability"`
+	QualityTier  string   `json:"quality_tier"`
 	ReachChecked int      `json:"reach_checked"`
 	ReachExposed int      `json:"reach_exposed"`
 
@@ -77,6 +79,8 @@ func (r scanReport) toFindings(scanID, repoID uint, commit, subPath string) []db
 			CWE:          f.CWE,
 			Location:     f.Location,
 			Affected:     f.Affected,
+			Reachability: f.Reachability,
+			QualityTier:  f.QualityTier,
 			Trace:        f.Trace,
 			Boundary:     f.Boundary,
 			Validation:   f.Validation,

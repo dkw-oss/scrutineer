@@ -47,6 +47,14 @@
     <dd>{{if $f.Affected}}{{$f.Affected}}{{else}}-{{end}}</dd>
   </div>
   <div>
+    <dt class="text-muted-foreground">Reachability</dt>
+    <dd>{{if $f.Reachability}}{{$f.Reachability}}{{else}}-{{end}}</dd>
+  </div>
+  <div>
+    <dt class="text-muted-foreground">Quality tier</dt>
+    <dd>{{if $f.QualityTier}}{{$f.QualityTier}}{{else}}-{{end}}</dd>
+  </div>
+  <div>
     <dt class="text-muted-foreground">Sinks</dt>
     <dd>{{if $f.Sinks}}<a href="/repositories/{{$repo.ID}}#rt10"
         class="underline underline-offset-2"><code>{{$f.Sinks}}</code></a>{{else}}-{{end}}</dd>

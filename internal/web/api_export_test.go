@@ -304,6 +304,7 @@ func TestExportFindings_carriesDBFields(t *testing.T) {
 		"id", "scan_id", "repository_id", "commit", "sub_path",
 		"fingerprint", "last_seen_scan_id", "last_seen_commit", "seen_count",
 		"finding_id", "sinks", "title", "severity", "status", "cwe", "location", "affected",
+		"reachability", "quality_tier",
 		"cve_id", "cvss_vector", "cvss_score", "fix_version", "fix_commit",
 		"resolution", "disclosure_draft", "assignee",
 		"trace", "boundary", "validation", "prior_art", "reach", "rating",

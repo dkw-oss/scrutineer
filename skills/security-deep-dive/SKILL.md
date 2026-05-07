@@ -123,6 +123,8 @@ For targets that are not library-shaped — package managers, servers, build too
 
 Reach is data, not a verdict. "No exposed dependent in the top N I checked" is a fact for the report. It does not make the sink safe — the search was bounded, private code exists, future code will be written.
 
+Record the verdict as `reachability`: `reachable` if a public entry point in the shipped artefact reaches the sink with attacker-controlled input; `harness_only` if the only path you can demonstrate is a test driver, fuzz target, or example program calling an internal function directly; `unclear` if you could not establish either. A `harness_only` finding is a real bug worth reporting upstream but is not disclosable as a vulnerability on its own.
+
 ### Step 6: Rate
 
 Severity, given everything above.
@@ -137,6 +139,8 @@ Low: unrealistic preconditions, narrow impact, or the deployment environment mos
 
 Confidence, separately: what you are certain of (the sink does X, per reproduction) versus what depends on context (an attacker reaches it if Y). Name the conditions.
 
+Record `quality_tier` per sink class. For memory safety: heap overflow, use-after-free, type confusion, and controllable write are `high`; stack exhaustion, assertion failure, and null-deref at a fixed offset are `low`. For injection: shell or eval with an attacker string is `high`; log injection is `low`. A `low` tier hit is a signpost, not a stopping point — when you land on one, keep tracing the same data path for a higher-tier sink nearby before writing it up.
+
 ## Output
 
-Write your report to `./report.json`. It must validate against `./schema.json`. Every inventory sink must appear either in `findings[].sinks` or in `ruled_out[].sinks`. Use `findings: []` for a clean report. Read `./context.json` for the repository url, default branch, and other host-provided facts if you need them for the `repository`, `commit`, and `artefact` fields. Set `spec_version` to `10`. Use today's date for the `date` field.
+Write your report to `./report.json`. It must validate against `./schema.json`. Every inventory sink must appear either in `findings[].sinks` or in `ruled_out[].sinks`. Use `findings: []` for a clean report. Read `./context.json` for the repository url, default branch, and other host-provided facts if you need them for the `repository`, `commit`, and `artefact` fields. Set `spec_version` to `11`. Use today's date for the `date` field.

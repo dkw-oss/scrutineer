@@ -341,6 +341,17 @@ type Finding struct {
 	CWE       string
 	Location  string
 	Affected  string // version range
+	// Reachability records whether a public entry point in the shipped
+	// artefact reaches the sink with attacker-controlled input
+	// (reachable), only a test driver does (harness_only), or the audit
+	// could not decide (unclear). harness_only findings are real bugs
+	// but not disclosable as vulnerabilities.
+	Reachability string `gorm:"index"`
+	// QualityTier classifies the sink: high (heap overflow, UAF, type
+	// confusion, controllable write, shell/eval injection) versus low
+	// (stack exhaustion, assertion failure, fixed-offset null deref, log
+	// injection). Low-tier hits are signposts to keep looking nearby.
+	QualityTier string `gorm:"index"`
 
 	// Disclosure / triage fields. Any of these may be set by a tool, a
 	// model-backed skill, or the analyst; see FindingHistory for the trail.
