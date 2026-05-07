@@ -15,7 +15,7 @@ Propose a minimal code patch that fixes a confirmed finding. You are not shippin
 ## Workspace
 
 - `./src` — the repository at its current HEAD, on the default branch, writable
-- `./context.json` — has `scrutineer.api_base`, `scrutineer.token`, `scrutineer.repository_id`, `scrutineer.finding_id` (required; this skill only makes sense finding-scoped)
+- `./context.json` — has `scrutineer.api_base`, `scrutineer.token`, `scrutineer.repository_id`, `scrutineer.scan_id`, `scrutineer.finding_id` (required; this skill only makes sense finding-scoped)
 - `./report.json` — write the patch + rationale here
 - `./schema.json` — shape of `report.json`
 
@@ -30,7 +30,7 @@ Propose a minimal code patch that fixes a confirmed finding. You are not shippin
    - **Minimal.** Change only what the fix requires. Do not refactor surrounding code, rename variables, reformat unrelated lines, or upgrade dependencies unless the fix inherently requires it.
    - **In place.** Fix the sink where it lives. If the finding's `location` is `pkg/foo/bar.go:42`, that is where the patch should land (or at the nearest layer where a guard is sensible — e.g. the input validator that feeds the sink).
    - **Consistent.** Match the existing code style and idioms. If the codebase uses a specific sanitiser, validator, or helper for similar cases, reuse it. Do not introduce a new helper module for a one-off fix.
-   - **Safe.** The patch must not break the reproduction's documented legitimate behaviour — only block the dangerous path. If you cannot tell where the dangerous path diverges from legitimate use, stop and write an inconclusive report (see below).
+   - **Safe.** The patch must not break the reproduction's documented legitimate behaviour — only block the dangerous path. If you cannot tell where the dangerous path diverges from legitimate use, stop and refuse to patch (see "Refusing to patch" below for the `{"error": ...}` shape).
    - **Include a test when practical.** If the repo has a test suite that covers the vulnerable code path, add a regression test that would fail without your patch. If the repo has no tests, or the sink is in a place that is hard to cover, skip this and say why in `rationale`.
 
 4. Once you have a working tree edit, generate a unified diff against HEAD:
@@ -38,10 +38,10 @@ Propose a minimal code patch that fixes a confirmed finding. You are not shippin
    ```sh
    cd src
    git add -N .
-   git diff HEAD -- . > /tmp/patch.diff
+   git diff HEAD -- . > ../patch.diff
    ```
 
-   Read `/tmp/patch.diff` and put its contents into `report.json` under the `patch` field. Do not commit; the diff is the artefact. If the diff is empty, something went wrong — do not write an empty patch. Write `{"error": "patch produced no diff"}` and exit 0.
+   Read `../patch.diff` (the workspace root, alongside `report.json`) and put its contents into `report.json` under the `patch` field. Do not commit; the diff is the artefact. If the diff is empty, something went wrong — do not write an empty patch. Write `{"error": "patch produced no diff"}` and exit 0.
 
 5. POST a finding note summarising the patch: `POST {api_base}/findings/{finding_id}/notes` with:
 
@@ -86,6 +86,6 @@ Write `{"error": "...", "rationale": "..."}` and exit 0 in any of these cases �
 ## Constraints
 
 - Do not push. Do not commit. Do not open a PR. The scrutineer workspace is ephemeral and isolated; your diff is the only thing that survives the scan.
-- Do not add dependencies unless the vulnerability genuinely requires one (e.g. a sanitiser library the codebase already uses elsewhere). New top-level deps in a patch almost always mean the fix is in the wrong place.
+- Do not add new dependencies. If sanitisation or escaping is needed, reuse a helper the codebase already imports. A patch that needs a new top-level dep almost always means the fix is in the wrong place.
 - Do not edit the lockfile, go.sum, Gemfile.lock, package-lock.json, Cargo.lock, etc. unless you also changed the manifest that owns it. Stray lockfile churn makes diffs hard to review.
 - Do not touch files outside what the fix requires. CI config, docs unrelated to the fix, README — leave alone.
