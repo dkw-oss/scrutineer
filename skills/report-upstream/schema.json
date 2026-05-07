@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "report-upstream report",
+  "description": "Outcome of filing a finding via GitHub private vulnerability reporting. On refusal only error is set and nothing was sent upstream.",
+  "type": "object",
+  "additionalProperties": false,
+  "oneOf": [
+    {
+      "required": ["upstream", "ghsa_id", "url", "patch_pushed"],
+      "properties": { "error": { "type": "null" } }
+    },
+    {
+      "required": ["error"],
+      "properties": { "error": { "type": "string" } }
+    }
+  ],
+  "properties": {
+    "upstream": {
+      "type": "string",
+      "pattern": "^[^/]+/[^/]+$",
+      "description": "owner/repo the report was filed against."
+    },
+    "ghsa_id": {
+      "type": "string",
+      "pattern": "^GHSA(-[23456789cfghjmpqrvwx]{4}){3}$"
+    },
+    "url": {
+      "type": "string",
+      "format": "uri"
+    },
+    "private_fork": {
+      "type": ["string", "null"],
+      "description": "full_name of the temporary private fork, or null if it was not available within the poll window."
+    },
+    "patch_pushed": {
+      "type": "boolean"
+    },
+    "patch_branch": {
+      "type": ["string", "null"]
+    },
+    "truncated": {
+      "type": "boolean",
+      "description": "True when the description had to be cut to fit GitHub's 65535-character cap."
+    },
+    "notes": {
+      "type": "string"
+    },
+    "error": {
+      "type": ["string", "null"],
+      "description": "Set when the skill refused to file (precondition failed) or the POST was rejected. When non-null nothing was sent upstream."
+    }
+  }
+}

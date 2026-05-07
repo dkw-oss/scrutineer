@@ -121,18 +121,20 @@ func (s *Server) apiGetRepository(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"id":             repo.ID,
-		"url":            repo.URL,
-		"name":           repo.Name,
-		"full_name":      repo.FullName,
-		"default_branch": repo.DefaultBranch,
-		"html_url":       repo.HTMLURL,
-		"stars":          repo.Stars,
-		"forks":          repo.Forks,
-		"archived":       repo.Archived,
-		"languages":      repo.Languages,
-		"license":        repo.License,
-		"fork":           repo.Fork,
+		"id":              repo.ID,
+		"url":             repo.URL,
+		"name":            repo.Name,
+		"full_name":       repo.FullName,
+		"default_branch":  repo.DefaultBranch,
+		"html_url":        repo.HTMLURL,
+		"stars":           repo.Stars,
+		"forks":           repo.Forks,
+		"archived":        repo.Archived,
+		"languages":       repo.Languages,
+		"license":         repo.License,
+		"fork":            repo.Fork,
+		"posture":         repo.Posture,
+		"posture_summary": repo.PostureSummary,
 	})
 }
 
