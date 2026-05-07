@@ -26,7 +26,7 @@ Scrutineer API (call with `Authorization: Bearer {token}`):
 - `GET {api_base}/repositories/{repository_id}/dependents` — top dependents with download counts (reach)
 - `GET {api_base}/repositories/{repository_id}/scans?skill=repo-overview&status=done` — then `GET /scans/{id}` for the brief summary
 
-If any of those return an empty list, the upstream scans were not run yet; fall back to your own reasoning over `./src`.
+If any of those return an empty list or a non-200 status, the upstream scans were not run yet or the API is unreachable; fall back to your own reasoning over `./src`.
 
 ## Phase 1: Inventory
 
@@ -57,7 +57,7 @@ Sink classes to enumerate. The classes are conceptual; the language you are audi
 - Reflection or metaprogramming primitives the library installs into the caller's environment: monkeypatches, prototype extensions, import hooks, global registrations, anything that changes behaviour outside the library's own namespace.
 - Round-trip integrity: any pair of operations where one is meant to be the inverse of the other. parse and serialize, encode and decode, marshal and unmarshal, escape and unescape. The sink is the pair, not either operation alone. The danger is asymmetry: if `decode(encode(x))` does not equal `x`, or `encode(decode(s))` does not produce the same `s` on re-decode, then a value can change meaning across a store-and-reload cycle. A validation that runs at parse time can be bypassed by what serialize emits. List every such pair the library exposes; the inventory entry is the pair.
 
-Read the entire source tree. Grep exhaustively — every code-exec primitive this language has, every shell-out, every file-open, every unsafe block. The grep finds them; you confirm each is a real sink and not a comment, test fixture, or vendored dependency.
+Read the entire source tree. Grep exhaustively — every code-exec primitive this language has, every shell-out, every file-open, every unsafe block. The grep finds them; you confirm each is a real sink and not a comment, test fixture, or third-party code vendored into this repo unmodified from upstream. Modified vendored code is first-party. (The note in the introduction about findings following vendored copies is the other direction: this repo's own code copied outward into forks or downstream vendors.)
 
 ## Phase 2: Per-sink checklist
 
@@ -93,7 +93,7 @@ Write a reproduction script and run it. The script demonstrates that the sink do
 
 Before concluding you cannot reproduce, enumerate the mechanisms that produce the kind of value the sink consumes. If the sink takes a path: argv, environment, glob expansion, archive extraction. If the sink takes an identifier: dynamic-definition primitives, struct-from-hash, deserialisation that turns keys into accessors, ORM attribute generation. If the sink takes a host: user input, redirect targets, DNS, service discovery. Write the list. Try each.
 
-Verify against the published artefact, not just git. Fetch the latest release from the registry, unpack it, confirm the sink is in the lines you said. HEAD diverges from releases.
+Verify against the published artefact, not just git. If `GET {api_base}/repositories/{repository_id}/packages` returns at least one package, fetch its latest release from the registry, unpack it, and confirm the sink is in the lines you said; HEAD diverges from releases. If it returns an empty list (CLI, service, monorepo, unpublished) the git checkout is the artefact and this check is a no-op.
 
 For round-trip pairs, the reproduction is the round-trip. Construct values containing characters that are structural in the serialized form — delimiters, separators, escape sequences, percent-encoded equivalents of any of those — and run them through `decode(encode(x))` and `encode(decode(s))`. If the output differs from the input, trace what changed. A character the decoder interprets but the encoder emits raw is the asymmetry. Then check what consumes the serialized form: if anything stores it and re-parses later, the validation that ran on the first parse does not cover the second.
 
