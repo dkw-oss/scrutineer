@@ -158,6 +158,10 @@ paths:
           schema:
             type: string
             enum: [new, enriched, triaged, ready, reported, acknowledged, fixed, published, rejected, duplicate]
+        - name: skill
+          in: query
+          description: Only return findings produced by scans of this skill (e.g. `semgrep`, `security-deep-dive`).
+          schema: { type: string }
       responses:
         '200':
           description: OK
