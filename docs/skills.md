@@ -24,6 +24,7 @@ These ship in `skills/` and are loaded with `-skills ./skills`. The `triage` ski
 | `cna-match` | Matches the repository to its CVE Numbering Authority so disclosures route to the right contact. |
 | `semgrep` | Runs semgrep with the `p/security-audit` and `p/secrets` rulesets and maps hits into the findings shape. |
 | `zizmor` | Audits GitHub Actions workflows and maps hits into the findings shape. |
+| `threat-model` | Derives the project's security contract from source and docs: components, entry-point trust table, claimed and disclaimed properties, and disposition labels. Loaded by `security-deep-dive` so it does not re-derive boundaries per run. |
 | `security-deep-dive` | The model-driven audit. Inventories trust boundaries and sinks, then runs a six-step trace/boundary/validate/prior-art/reach/rate analysis on each. |
 | `reachability` | Traces sinks already found in this app's dependencies through the app's own code to see which are reachable from its trust boundaries. |
 | `verify` | Re-checks one finding against current HEAD and records reproduces / fixed / cannot-reproduce. |
@@ -103,6 +104,7 @@ metadata:
 | `posture` | Posture tier and check results on the Repository row. |
 | `verify` | Verification result and miss-count update on one Finding. |
 | `patch` | Suggested-fix diff and base commit on one Finding. |
+| `threat_model` | Raw on the scan row; rendered on the repository's Threat Model tab. |
 
 If you need an output shape that is not in this list, see "When you need Go changes" in [development.md](development.md). For most custom skills `freeform` (store the JSON as-is, render it on the scan's Data tab) or `findings` (surface as triaged vulnerabilities) is enough.
 

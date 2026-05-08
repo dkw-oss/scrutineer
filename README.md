@@ -59,7 +59,7 @@ When the containerised runner is active (the default when Docker is available), 
 - **Skill-based scan pipeline** -- every scan is a claude-code skill on disk (SKILL.md + schema + optional scripts). The default pipeline for a new repo is itself a skill (`triage`) that enqueues the others; edit its SKILL.md to change what runs
 - **Structured findings** -- vulnerability reports parsed into a database with severity, CWE, location (linked to source), affected versions, and a six-step analysis trace
 - **Finding workflow** -- guided triage flow from new through verification, disclosure, and publication with human gates at each step
-- **Threat model view** -- trust boundaries, sink inventory, ruled-out entries, and the full audit reasoning rendered from the scan report
+- **Threat model view** -- the project's security contract (components, entry-point trust table, properties provided and disclaimed, known non-findings) rendered from the `threat-model` scan, falling back to the deep-dive's boundaries and sink inventory on older repositories
 - **Dependency exploration** -- dependency and dependent tables with one-click import to scan any package's source repository
 - **Package registry data** -- downloads, dependents, versions, and registry links for every published package
 - **Known advisories** -- existing CVEs and security advisories pulled automatically
@@ -95,6 +95,7 @@ When a repo is added, the `triage` skill is enqueued. Its SKILL.md lists the ski
 | `maintainers` | Model-backed analysis identifying real maintainers and contact routes |
 | `repo-overview` | Runs `brief --json` for a structured project summary |
 | `subprojects` | Enumerates monorepo packages/workspaces so deep-dives can be scoped to a sub-path |
+| `threat-model` | Derives the project's security contract (components, entry-point trust table, claimed and disclaimed properties) for the deep-dive to load |
 | `semgrep` | Static analysis mapped into findings shape |
 | `zizmor` | GitHub Actions workflow audit mapped into findings shape |
 | `security-deep-dive` | The model-backed audit producing structured findings |
