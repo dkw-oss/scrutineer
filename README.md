@@ -73,6 +73,7 @@ When the containerised runner is active (the default when Docker is available), 
 - **Usage tracking** -- per-scan token and cost figures plus a `/usage` page totalling spend per skill
 - **SBOM import** -- upload a CycloneDX or SPDX document, resolve each component to a source repository, and queue scans automatically
 - **CNA matching** -- identify the CVE Numbering Authority whose scope covers a repo so disclosures go to the right contact
+- **Upstream reporting** -- file a finding on the upstream repository through GitHub's private vulnerability reporting with the proposed patch attached, and push the fix to the temporary private fork when GitHub grants access
 - **Reachability analysis** -- trace sinks found in dependencies through application code to see which are actually reachable
 - **Rescan dedup** -- findings carry a content fingerprint so re-running a scan updates existing rows instead of creating duplicates; findings that stop appearing are marked "not seen" with a miss count
 - **CSAF export** -- download any finding as a schema-validated CSAF 2.0 advisory document
@@ -101,6 +102,7 @@ When a repo is added, the `triage` skill is enqueued. Its SKILL.md lists the ski
 | `verify` | Re-checks one finding against current HEAD; records reproduces / fixed / can't-reproduce |
 | `disclose` | Drafts a GHSA-shaped advisory (title, description, CVSS, CWEs, references) for one finding |
 | `patch` | Proposes a unified diff fixing one finding, written back as a note for analyst review |
+| `report-upstream` | Files one finding on the upstream repository via GitHub PVR with the proposed patch attached; the action that moves a finding to `reported` |
 | `reachability` | Traces dependency sinks through application code to determine which are reachable from trust boundaries |
 | `cna-match` | Matches a repository to its CVE Numbering Authority so disclosures route to the right contact |
 | `posture` | Records the repo's security posture (reporting policy, response history, hardening) on the Repository row |
@@ -146,7 +148,7 @@ Each finding from the `security-deep-dive` skill starts at **new** and moves thr
 1. **new** -- just identified. Click "Verify" to trigger independent confirmation, or "Skip to triage" if you trust the audit, or "Reject"
 2. **enriched** -- verification ran. Review and click "Triage"
 3. **triaged** -- confirmed real. Click "Prepare disclosure"
-4. **ready** -- draft prepared. Click "Mark as reported"
+4. **ready** -- draft prepared. Run the `report-upstream` skill to file it via GitHub PVR (github.com only, requires `gh` auth), or click "Mark as reported" after sending it yourself
 5. **reported** -- sent to maintainer. Click "Acknowledged" when they respond
 6. **acknowledged** -- maintainer working on fix. Click "Mark fixed" when it ships
 7. **fixed** -- patch available. Click "Publish" to issue the advisory
