@@ -204,15 +204,13 @@ The config file can also replace the model pick list and pin the default model:
       - name: Opus
         id:   claude-opus-4-7
 
-## Interaction with Claude Code Sandboxing
+## Sandboxed Claude Code configs
 
-If you use [sandboxing for Claude Code](https://code.claude.com/docs/en/sandboxing) and your `~/.claude/settings.json` file enforces it, Scrutineer scans will fail due to network restrictions and other limitations.
-
-You should not disable or remove your sandboxing config globally just to run Scrutineer, you can instead create a separate config file with relaxed restrictions and point Claude at it while using Scrutineer.
-
-Copy your Claude config to another directory, like `~/.claude-scrutineer/settings.json`, and remove the sandbox-related settings from the copied file. Then run Scrutineer with `CLAUDE_CONFIG_DIR` set to the given directory. Scrutineer will then use the relaxed configuration without affecting your normal Claude Code usage:
+In `--no-docker` mode the `claude` subprocess inherits your `~/.claude/settings.json`, so [sandbox settings](https://code.claude.com/docs/en/sandboxing) that restrict network or filesystem access there will fail skills that need them. Point `claude` at a separate config directory just for scrutineer runs:
 
     CLAUDE_CONFIG_DIR=~/.claude-scrutineer go run ./cmd/scrutineer -skills ./skills
+
+Copy your `settings.json` into that directory and drop the sandbox keys; your normal Claude Code config is untouched. Docker mode is not affected: `claude` runs inside the container with its own environment regardless of the host config.
 
 ## Security
 
