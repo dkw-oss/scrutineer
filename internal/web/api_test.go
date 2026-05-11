@@ -18,14 +18,13 @@ func seedRunningScan(t *testing.T, s *Server) (db.Repository, db.Scan) {
 	t.Helper()
 	repo := db.Repository{URL: "https://example.com/x", Name: "x"}
 	s.DB.Create(&repo)
-	now := time.Now()
 	scan := db.Scan{
 		RepositoryID: repo.ID,
 		Kind:         worker.JobSkill,
 		Status:       db.ScanRunning,
 		Model:        "fake",
 		APIToken:     "tok-" + strconv.FormatUint(uint64(repo.ID), 10),
-		StartedAt:    &now,
+		StartedAt:    new(time.Now()),
 	}
 	s.DB.Create(&scan)
 	return repo, scan

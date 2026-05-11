@@ -256,8 +256,7 @@ func (s *Server) apiRunFindingSkill(w http.ResponseWriter, r *http.Request) {
 		Model string `json:"model"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
-	fid := uint(id)
-	scanID, err := s.enqueueSkillScoped(r.Context(), repoID, skill.ID, &fid, body.Model)
+	scanID, err := s.enqueueSkillScoped(r.Context(), repoID, skill.ID, new(uint(id)), body.Model)
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, err.Error())
 		return

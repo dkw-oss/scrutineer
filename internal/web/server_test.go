@@ -1425,14 +1425,12 @@ func TestFindingPatchDownload(t *testing.T) {
 		Status: db.FindingTriaged, SuggestedFix: gatedDiff, SuggestedFixCommit: "abc123"}
 	s.DB.Create(&finding)
 
-	fid := finding.ID
-	finished := time.Now()
 	report := `{"patch":"diff --git a/foo.go b/foo.go\n@@ -1 +1 @@\n-old\n+new\n","rationale":"adds guard","files_changed":["foo.go"],"base_commit":"abc123","tests_added":false}`
 	patchScan := db.Scan{
 		RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone,
 		SkillName:  "patch",
-		FindingID:  &fid,
-		FinishedAt: &finished,
+		FindingID:  new(finding.ID),
+		FinishedAt: new(time.Now()),
 		Report:     report,
 	}
 	s.DB.Create(&patchScan)
@@ -1822,11 +1820,10 @@ func TestRetry_preservesSubPath(t *testing.T) {
 	s.DB.Create(&repo)
 	skill := db.Skill{Name: "security-deep-dive", Description: "x", Body: "b", Active: true, Source: "ui", Version: 1}
 	s.DB.Create(&skill)
-	finished := time.Now()
 	orig := db.Scan{
 		RepositoryID: repo.ID, Kind: "skill", Status: db.ScanFailed,
 		SkillID: &skill.ID, SkillName: "security-deep-dive",
-		SubPath: "airflow-core", FinishedAt: &finished,
+		SubPath: "airflow-core", FinishedAt: new(time.Now()),
 	}
 	s.DB.Create(&orig)
 
@@ -2165,8 +2162,7 @@ func TestScanCancel_terminalRejected(t *testing.T) {
 
 	repo := db.Repository{URL: "https://example.com/x.git", Name: "x"}
 	s.DB.Create(&repo)
-	fin := time.Now()
-	scan := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, FinishedAt: &fin}
+	scan := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, FinishedAt: new(time.Now())}
 	s.DB.Create(&scan)
 
 	req := httptest.NewRequest("POST", fmt.Sprintf("/scans/%d/cancel", scan.ID), nil)
@@ -2183,8 +2179,7 @@ func TestSubprojectsRenderedOnRepoPage(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()
 
-	now := time.Now()
-	repo := db.Repository{URL: "https://github.com/apache/airflow.git", Name: "airflow", FetchedAt: &now}
+	repo := db.Repository{URL: "https://github.com/apache/airflow.git", Name: "airflow", FetchedAt: new(time.Now())}
 	s.DB.Create(&repo)
 	s.DB.Create(&db.Subproject{RepositoryID: repo.ID, Path: "airflow-core", Name: "airflow-core", Kind: "python-package", Description: "Core runtime"})
 	s.DB.Create(&db.Subproject{RepositoryID: repo.ID, Path: "providers/amazon", Kind: "python-package", Description: "AWS provider"})

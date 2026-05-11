@@ -8,12 +8,11 @@ import (
 )
 
 func fullConfig() *config.Config {
-	yes := true
 	return &config.Config{
 		Addr:             "0.0.0.0:9090",
 		Data:             "/var/lib/scrutineer",
 		Effort:           "medium",
-		NoDocker:         &yes,
+		NoDocker:         new(true),
 		RunnerImage:      "custom:v1",
 		SkillsRepo:       "https://example.com/skills.git",
 		Skills:           []string{"/etc/skills"},

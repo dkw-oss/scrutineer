@@ -1000,8 +1000,7 @@ func (s *Server) runFindingSkill(w http.ResponseWriter, r *http.Request, name st
 		http.Error(w, name+" skill is not installed", http.StatusPreconditionFailed)
 		return
 	}
-	fid := f.ID
-	scanID, err := s.enqueueSkillScoped(r.Context(), scan.RepositoryID, skill.ID, &fid, r.FormValue("model"))
+	scanID, err := s.enqueueSkillScoped(r.Context(), scan.RepositoryID, skill.ID, new(f.ID), r.FormValue("model"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1670,11 +1669,10 @@ func (s *Server) scanCancel(w http.ResponseWriter, r *http.Request) {
 	}
 	if !s.Worker.Cancel(scan.ID) {
 		// Not in flight: mark the row so the queue handler drops it on pickup.
-		now := time.Now()
 		s.DB.Model(&scan).Updates(map[string]any{
 			"status":      db.ScanCancelled,
 			"error":       "cancelled by user",
-			"finished_at": &now,
+			"finished_at": new(time.Now()),
 		})
 	}
 	s.redirect(w, r, fmt.Sprintf("/scans/%d", scan.ID))

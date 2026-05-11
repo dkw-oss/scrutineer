@@ -118,8 +118,7 @@ func TestRepoShow_totalCostBadge(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()
 
-	now := time.Now()
-	repo := db.Repository{URL: "https://x/spend", Name: "spend", FetchedAt: &now}
+	repo := db.Repository{URL: "https://x/spend", Name: "spend", FetchedAt: new(time.Now())}
 	s.DB.Create(&repo)
 	s.DB.Create(&db.Scan{RepositoryID: repo.ID, Kind: "skill", SkillName: "a", Status: db.ScanDone, CostUSD: 1.50})
 	s.DB.Create(&db.Scan{RepositoryID: repo.ID, Kind: "skill", SkillName: "b", Status: db.ScanDone, CostUSD: 0.25})

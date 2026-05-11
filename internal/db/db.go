@@ -732,13 +732,12 @@ func BackfillFindings(gdb *gorm.DB) {
 // startup: a running row with no worker attached means the previous process
 // died mid-job and the UI would otherwise show a spinner forever.
 func SweepRunning(gdb *gorm.DB) error {
-	now := time.Now()
 	return gdb.Model(&Scan{}).
 		Where("status = ?", ScanRunning).
 		Updates(map[string]any{
 			"status":      ScanFailed,
 			"error":       "server restarted during run",
-			"finished_at": &now,
+			"finished_at": new(time.Now()),
 		}).Error
 }
 

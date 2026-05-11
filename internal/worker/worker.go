@@ -122,10 +122,9 @@ func (w *Worker) wrap(h handler) func(context.Context, []byte) error {
 			w.mu.Unlock()
 		}()
 
-		now := time.Now()
 		scan.Status = db.ScanRunning
 		scan.StatusPriority = db.StatusPriorityFor(db.ScanRunning)
-		scan.StartedAt = &now
+		scan.StartedAt = new(time.Now())
 		scan.Log = ""
 		scan.Error = ""
 		if err := w.DB.Save(&scan).Error; err != nil {
@@ -149,8 +148,7 @@ func (w *Worker) wrap(h handler) func(context.Context, []byte) error {
 
 		report, err := h(ctx, &scan, emit)
 
-		fin := time.Now()
-		scan.FinishedAt = &fin
+		scan.FinishedAt = new(time.Now())
 		switch {
 		case errors.Is(ctx.Err(), context.DeadlineExceeded):
 			scan.Status = db.ScanFailed
