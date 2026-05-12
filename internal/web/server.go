@@ -88,6 +88,7 @@ func New(gdb *gorm.DB, q *queue.Queue, log *slog.Logger, broker *Broker, w *work
 			}
 			return ""
 		},
+		"catlabel":   CategoryLabel,
 		"md":         renderMarkdown,
 		"jsontree":   jsonTree,
 		"prettyjson": prettyJSON,
@@ -652,10 +653,14 @@ func (s *Server) orgShow(w http.ResponseWriter, r *http.Request) {
 	// Sort by severity (Critical→High→Medium→Low), then newest first
 	// within a severity. Purely alphabetical severity would put Low
 	// before Medium, which misreads for a stakeholder scanning the tab.
+	category := r.URL.Query().Get("category")
+	findingsQ := s.DB.Where("repository_id IN ?", repoIDs).
+		Where("scan_id IN (?)", deepDiveScanIDs(s.DB))
+	if category != "" {
+		findingsQ = applyCWECategoryFilter(findingsQ, category)
+	}
 	var findings []db.Finding
-	s.DB.Where("repository_id IN ?", repoIDs).
-		Where("scan_id IN (?)", deepDiveScanIDs(s.DB)).
-		Order(severityOrder).Order("id desc").
+	findingsQ.Order(severityOrder).Order("id desc").
 		Limit(orgTabLimit).Find(&findings)
 	reposByID := loadRepoMap(s.DB, findings)
 
@@ -678,6 +683,9 @@ func (s *Server) orgShow(w http.ResponseWriter, r *http.Request) {
 		"Advisories":    advisories,
 		"AdvisoryRepos": advisoryRepos,
 		"Maintainers":   maintainers,
+		"Category":      category,
+		"Categories":    CWECategories(),
+		"Uncategorized": UncategorizedCWE,
 	})
 }
 
@@ -834,7 +842,10 @@ var severityOrder = `CASE severity
 // Findings with no matching scan or an empty skill_name are treated as
 // deep-dive so legacy rows don't get lost. The returned scanSkill map is
 // keyed by scan ID and is what the template reads to label scanner cards.
-func loadRepoFindings(gdb *gorm.DB, repoID uint) ([]db.Finding, []db.Finding, map[uint]string) {
+// When category is non-empty, only the deep-dive slice is narrowed to the
+// View-1400 bucket; scanner findings are returned unfiltered so the Scanners
+// tab stays reachable.
+func loadRepoFindings(gdb *gorm.DB, repoID uint, category string) ([]db.Finding, []db.Finding, map[uint]string) {
 	var all []db.Finding
 	gdb.Where("repository_id = ? AND status NOT IN ?", repoID,
 		[]db.FindingLifecycle{db.FindingRejected, db.FindingDuplicate}).
@@ -856,6 +867,9 @@ func loadRepoFindings(gdb *gorm.DB, repoID uint) ([]db.Finding, []db.Finding, ma
 	for _, f := range all {
 		name := scanSkill[f.ScanID]
 		if name == "" || name == deepDiveSkillName {
+			if category != "" && !findingMatchesCategory(f.CWE, category) {
+				continue
+			}
 			deepDive = append(deepDive, f)
 		} else {
 			scanners = append(scanners, f)
@@ -876,6 +890,10 @@ func (s *Server) findings(w http.ResponseWriter, r *http.Request) {
 	sev := r.URL.Query().Get("severity")
 	if sev != "" {
 		q = q.Where("severity = ?", sev)
+	}
+	category := r.URL.Query().Get("category")
+	if category != "" {
+		q = applyCWECategoryFilter(q, category)
 	}
 	owner := r.URL.Query().Get("owner")
 	if owner != "" {
@@ -930,6 +948,7 @@ func (s *Server) findings(w http.ResponseWriter, r *http.Request) {
 
 	s.render(w, r, "findings.html", map[string]any{
 		"Findings": rows, "Page": page, "Severity": sev, "Sort": sort,
+		"Category": category, "Categories": CWECategories(), "Uncategorized": UncategorizedCWE,
 		"Repos": reposByID, "Q": search, "AnySubPath": anySubPath,
 		"Owner": owner, "Missed": missed, "MissedTotal": missedTotal,
 		"Scanners": scanners, "ScannerTotal": scannerTotal,
@@ -1570,7 +1589,8 @@ func (s *Server) repoShow(w http.ResponseWriter, r *http.Request) {
 	s.DB.Model(&db.Scan{}).Where("repository_id = ?", repo.ID).
 		Select("COALESCE(SUM(cost_usd), 0)").Scan(&totalCost)
 
-	findings, scannerFindings, scanSkill := loadRepoFindings(s.DB, repo.ID)
+	category := r.URL.Query().Get("category")
+	findings, scannerFindings, scanSkill := loadRepoFindings(s.DB, repo.ID, category)
 
 	var maintainers []db.Maintainer
 	s.DB.Joins("JOIN repository_maintainers ON repository_maintainers.maintainer_id = maintainers.id").
@@ -1637,9 +1657,12 @@ func (s *Server) repoShow(w http.ResponseWriter, r *http.Request) {
 		"TMCommit":        tmCommit,
 		"Deps":            deps, "Pkgs": pkgs, "Dependents": dependents, "Advisories": advisories, "Maintainers": maintainers, "ThreatModel": threatModel,
 		"KnownURLs": knownURLs, "KnownPURLs": knownPURLs,
-		"Skills":       activeSkills,
-		"Subprojects":  subprojects,
-		"SubScanCount": subScanCount,
+		"Skills":        activeSkills,
+		"Subprojects":   subprojects,
+		"SubScanCount":  subScanCount,
+		"Category":      category,
+		"Categories":    CWECategories(),
+		"Uncategorized": UncategorizedCWE,
 	}
 	s.render(w, r, "repo_show.html", data)
 }

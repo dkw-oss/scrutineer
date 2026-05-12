@@ -11,6 +11,7 @@
       <input class="input" type="search" name="q" value="{{.Q}}" placeholder="Search findings"
              autocomplete="off" spellcheck="false">
       <input type="hidden" name="severity" value="{{.Severity}}">
+      <input type="hidden" name="category" value="{{.Category}}">
       <input type="hidden" name="sort" value="{{.Sort}}">
       {{if .Missed}}<input type="hidden" name="missed" value="1">{{end}}
       {{if .Scanners}}<input type="hidden" name="scanners" value="1">{{end}}
@@ -18,12 +19,12 @@
     {{if gt .ScannerTotal 0}}
       {{if .Scanners}}
         <a class="btn-outline" aria-pressed="true"
-           href="/findings?q={{.Q}}&severity={{.Severity}}&sort={{.Sort}}&missed={{$mp}}">
+           href="/findings?q={{.Q}}&severity={{.Severity}}&category={{.Category}}&sort={{.Sort}}&missed={{$mp}}">
           <i data-lucide="scan-search"></i> Include scanners ({{.ScannerTotal}})
         </a>
       {{else}}
         <a class="btn-outline"
-           href="/findings?q={{.Q}}&severity={{.Severity}}&sort={{.Sort}}&missed={{$mp}}&scanners=1">
+           href="/findings?q={{.Q}}&severity={{.Severity}}&category={{.Category}}&sort={{.Sort}}&missed={{$mp}}&scanners=1">
           <i data-lucide="scan-search"></i> Include scanners ({{.ScannerTotal}})
         </a>
       {{end}}
@@ -31,12 +32,12 @@
     {{if gt .MissedTotal 0}}
       {{if .Missed}}
         <a class="btn-outline" aria-pressed="true"
-           href="/findings?q={{.Q}}&severity={{.Severity}}&sort={{.Sort}}&scanners={{$sc}}">
+           href="/findings?q={{.Q}}&severity={{.Severity}}&category={{.Category}}&sort={{.Sort}}&scanners={{$sc}}">
           <i data-lucide="eye-off"></i> Not seen on rescan ({{.MissedTotal}})
         </a>
       {{else}}
         <a class="btn-outline"
-           href="/findings?q={{.Q}}&severity={{.Severity}}&sort={{.Sort}}&missed=1&scanners={{$sc}}">
+           href="/findings?q={{.Q}}&severity={{.Severity}}&category={{.Category}}&sort={{.Sort}}&missed=1&scanners={{$sc}}">
           <i data-lucide="eye-off"></i> Not seen on rescan ({{.MissedTotal}})
         </a>
       {{end}}
@@ -49,11 +50,29 @@
       </button>
       <div data-popover aria-hidden="true" data-align="end">
         <div role="menu">
-          <a role="menuitem" href="/findings?q={{.Q}}&sort={{.Sort}}&missed={{$mp}}&scanners={{$sc}}">All severities</a>
+          <a role="menuitem" href="/findings?q={{.Q}}&category={{.Category}}&sort={{.Sort}}&missed={{$mp}}&scanners={{$sc}}">All severities</a>
           {{range (list "Critical" "High" "Medium" "Low")}}
-            <a role="menuitem" href="/findings?q={{$.Q}}&severity={{.}}&sort={{$.Sort}}&missed={{$mp}}&scanners={{$sc}}"
+            <a role="menuitem" href="/findings?q={{$.Q}}&severity={{.}}&category={{$.Category}}&sort={{$.Sort}}&missed={{$mp}}&scanners={{$sc}}"
                {{if eq . $.Severity}}aria-current="true"{{end}}>{{.}}</a>
           {{end}}
+        </div>
+      </div>
+    </div>
+    <div class="dropdown-menu">
+      <button type="button" class="btn-outline" aria-haspopup="menu" aria-expanded="false">
+        <i data-lucide="tags"></i>
+        {{if .Category}}{{catlabel .Category}}{{else}}Category{{end}}
+        <i data-lucide="chevron-down"></i>
+      </button>
+      <div data-popover aria-hidden="true" data-align="end">
+        <div role="menu">
+          <a role="menuitem" href="/findings?q={{.Q}}&severity={{.Severity}}&sort={{.Sort}}&missed={{$mp}}&scanners={{$sc}}">All categories</a>
+          {{range .Categories}}
+            <a role="menuitem" href="/findings?q={{$.Q}}&severity={{$.Severity}}&category={{.}}&sort={{$.Sort}}&missed={{$mp}}&scanners={{$sc}}"
+               {{if eq . $.Category}}aria-current="true"{{end}}>{{catlabel .}}</a>
+          {{end}}
+          <a role="menuitem" href="/findings?q={{.Q}}&severity={{.Severity}}&category={{.Uncategorized}}&sort={{.Sort}}&missed={{$mp}}&scanners={{$sc}}"
+             {{if eq .Uncategorized .Category}}aria-current="true"{{end}}>{{.Uncategorized}}</a>
         </div>
       </div>
     </div>
@@ -66,7 +85,7 @@
       <div data-popover aria-hidden="true" data-align="end">
         <div role="menu">
           {{range (list "newest" "severity" "repository")}}
-            <a role="menuitem" href="/findings?q={{$.Q}}&severity={{$.Severity}}&sort={{.}}&missed={{$mp}}&scanners={{$sc}}"
+            <a role="menuitem" href="/findings?q={{$.Q}}&severity={{$.Severity}}&category={{$.Category}}&sort={{.}}&missed={{$mp}}&scanners={{$sc}}"
                {{if eq . $.Sort}}aria-current="true"{{end}}>{{.}}</a>
           {{end}}
         </div>
