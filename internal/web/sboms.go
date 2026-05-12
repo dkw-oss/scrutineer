@@ -142,6 +142,9 @@ func (s *Server) sbomShow(w http.ResponseWriter, r *http.Request) {
 		if sev := r.URL.Query().Get("severity"); sev != "" {
 			q = q.Where("severity = ?", sev)
 		}
+		if category := r.URL.Query().Get("category"); category != "" {
+			q = applyCWECategoryFilter(q, category)
+		}
 		switch sort {
 		case sortSeverity:
 			q = q.Order(severityOrder).Order("id desc")
@@ -173,6 +176,8 @@ func (s *Server) sbomShow(w http.ResponseWriter, r *http.Request) {
 		"Findings": findings, "Advisories": advisories, "Repos": reposByID,
 		"Resolved": resolved, "WithRepo": withRepo,
 		"Severity": r.URL.Query().Get("severity"), "Sort": sort,
+		"Category":   r.URL.Query().Get("category"),
+		"Categories": CWECategories(), "Uncategorized": UncategorizedCWE,
 		"Scope": scope, "HasScope": hasScope,
 	})
 }

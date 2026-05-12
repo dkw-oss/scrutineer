@@ -570,6 +570,52 @@ func TestFindingsSearchFilters(t *testing.T) {
 	}
 }
 
+func TestFindings_categoryFilter(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	repo := db.Repository{URL: "https://example.com/x", Name: "x"}
+	s.DB.Create(&repo)
+	scan := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: "security-deep-dive"}
+	s.DB.Create(&scan)
+	s.DB.Create(&db.Finding{ScanID: scan.ID, RepositoryID: repo.ID, Title: "OS command injection",
+		Severity: "Critical", Location: "shell.go:10", CWE: "CWE-78"})
+	s.DB.Create(&db.Finding{ScanID: scan.ID, RepositoryID: repo.ID, Title: "Use-after-free in parser",
+		Severity: "High", Location: "parse.go:7", CWE: "CWE-416"})
+	s.DB.Create(&db.Finding{ScanID: scan.ID, RepositoryID: repo.ID, Title: "Unlabelled finding",
+		Severity: "Low", Location: "misc.go:1"})
+
+	cases := []struct {
+		category string
+		want     []string
+		missing  []string
+	}{
+		{"Injection", []string{"OS command injection"}, []string{"Use-after-free in parser", "Unlabelled finding"}},
+		{"Memory Safety", []string{"Use-after-free in parser"}, []string{"OS command injection", "Unlabelled finding"}},
+		{UncategorizedCWE, []string{"Unlabelled finding"}, []string{"OS command injection", "Use-after-free in parser"}},
+		{"Not A Real Category", nil, []string{"OS command injection", "Use-after-free in parser", "Unlabelled finding"}},
+	}
+	for _, tc := range cases {
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, localReq("GET", "/findings?category="+url.QueryEscape(tc.category)))
+		if w.Code != 200 {
+			t.Errorf("category=%q status %d", tc.category, w.Code)
+			continue
+		}
+		body := w.Body.String()
+		for _, title := range tc.want {
+			if !strings.Contains(body, title) {
+				t.Errorf("category=%q missing %q", tc.category, title)
+			}
+		}
+		for _, title := range tc.missing {
+			if strings.Contains(body, ">"+title+"</a>") {
+				t.Errorf("category=%q should not include %q", tc.category, title)
+			}
+		}
+	}
+}
+
 func TestPackagesSearchFilters(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()
@@ -880,7 +926,7 @@ func TestFindings_missedFilterAndBadge(t *testing.T) {
 		t.Error("?missed=1 should show findings with missed_count > 0")
 	}
 	// Severity/sort links preserve the missed filter.
-	if !strings.Contains(body, "severity=High&sort=newest&missed=1") {
+	if !strings.Contains(body, "severity=High&category=&sort=newest&missed=1") {
 		t.Error("severity dropdown links should carry missed=1")
 	}
 }
@@ -1636,6 +1682,44 @@ func TestRepoShow_findingsTabAggregatesAcrossScans(t *testing.T) {
 	}
 	if !strings.Contains(scannerPanel, "leaked-key") || strings.Contains(scannerPanel, "old-high") {
 		t.Errorf("Scanners tab should hold non-deep-dive results only")
+	}
+}
+
+func TestRepoShow_categoryFilterKeepsScannerTab(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	repo := db.Repository{URL: "https://example.com/cat", Name: "cat"}
+	s.DB.Create(&repo)
+
+	deep := db.Scan{RepositoryID: repo.ID, Kind: "skill", SkillName: deepDiveSkillName, Status: db.ScanDone}
+	s.DB.Create(&deep)
+	s.DB.Create(&db.Finding{ScanID: deep.ID, RepositoryID: repo.ID,
+		Title: "memory-bug", Severity: "High", CWE: "CWE-416"})
+
+	scanner := db.Scan{RepositoryID: repo.ID, Kind: "skill", SkillName: "secrets", Status: db.ScanDone}
+	s.DB.Create(&scanner)
+	s.DB.Create(&db.Finding{ScanID: scanner.ID, RepositoryID: repo.ID,
+		Title: "leaked-key", Severity: "Critical", CWE: "CWE-798"})
+
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, localReq("GET",
+		fmt.Sprintf("/repositories/%d?category=%s", repo.ID, url.QueryEscape("Injection"))))
+	if w.Code != 200 {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+	body := w.Body.String()
+
+	deepPanel := tabPanelBody(body, `id="rp4"`)
+	scannerPanel := tabPanelBody(body, `id="rp11"`)
+	if strings.Contains(deepPanel, ">memory-bug</a>") {
+		t.Errorf("deep-dive finding outside category should be filtered out")
+	}
+	if !strings.Contains(body, `id="rp11"`) {
+		t.Errorf("Scanners tab vanished when a category was selected")
+	}
+	if !strings.Contains(scannerPanel, ">leaked-key</a>") {
+		t.Errorf("scanner finding should remain regardless of category filter")
 	}
 }
 
