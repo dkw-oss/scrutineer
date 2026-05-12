@@ -255,6 +255,51 @@ func TestFindingCSAF_404ForMissingFinding(t *testing.T) {
 	}
 }
 
+// Older rows may carry a populated vector with a stale CVSSScore == 0
+// (the column wasn't kept in sync before #8). Export must still emit a
+// correct score so downstream consumers don't see baseScore: 0 next to
+// a CRITICAL vector.
+func TestFindingCSAF_scoreDerivedFromVectorIgnoresStoredScore(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	f := seedCSAFFinding(t, s, func(f *db.Finding) {
+		f.CVSSScore = 0
+	})
+	w := getCSAF(t, s, f.ID)
+	if w.Code != 200 {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+	doc := decodeCSAF(t, w.Body.Bytes())
+	v := doc["vulnerabilities"].([]any)[0].(map[string]any)
+	cvss := v["scores"].([]any)[0].(map[string]any)["cvss_v3"].(map[string]any)
+	if cvss["baseScore"].(float64) != 9.8 || cvss["baseSeverity"] != "CRITICAL" {
+		t.Errorf("baseScore = %v, baseSeverity = %v; want 9.8 / CRITICAL", cvss["baseScore"], cvss["baseSeverity"])
+	}
+}
+
+// parseCVSSv3Vector tolerates a truncated vector (returns a partial
+// struct) but go-cvss rejects it; the scores block must be omitted
+// rather than emitted with a fabricated baseScore: 0.
+func TestFindingCSAF_partialVectorOmitsScores(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	f := seedCSAFFinding(t, s, func(f *db.Finding) {
+		f.CVSSVector = "CVSS:3.1/AV:N/AC:L"
+		f.CVSSScore = 0
+	})
+	w := getCSAF(t, s, f.ID)
+	if w.Code != 200 {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+	doc := decodeCSAF(t, w.Body.Bytes())
+	v := doc["vulnerabilities"].([]any)[0].(map[string]any)
+	if _, ok := v["scores"]; ok {
+		t.Errorf("scores must be omitted when vector is unparseable by go-cvss: %+v", v["scores"])
+	}
+}
+
 func TestFindingCSAF_malformedCVSSVectorIsOmitted(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()

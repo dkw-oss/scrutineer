@@ -126,7 +126,7 @@ One row per vulnerability. Lifecycle columns are mutated through `db.WriteFindin
 | affected | text | Version range, e.g. `>=0.2.0, <=4.0.5`. |
 | cve_id | text | e.g. `CVE-2026-12345`. |
 | cvss_vector | text | e.g. `CVSS:3.1/AV:N/AC:L/...`. |
-| cvss_score | real | |
+| cvss_score | real | Derived from `cvss_vector` on write. Cleared when the vector is empty or unparseable. |
 | fix_version | text | |
 | fix_commit | text | |
 | resolution | text | `fix`, `migrate`, `workaround`, `adopt`, `wontfix`. |

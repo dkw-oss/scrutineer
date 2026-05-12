@@ -504,13 +504,22 @@ func buildProductStatusMulti(f db.Finding, productIDs []string, fdRows []db.Find
 	return ps
 }
 
+// buildScoreMulti derives the CVSS block from the vector itself. The
+// stored f.CVSSScore is intentionally ignored: rows written before the
+// auto-sync landed (or by a tool that wrote vector without score) would
+// otherwise emit baseScore: 0 / baseSeverity: NONE next to a populated
+// vector, which is worse than no score at all.
 func buildScoreMulti(f db.Finding, productIDs []string) *csafScore {
 	cvss := parseCVSSv3Vector(f.CVSSVector)
 	if cvss == nil {
 		return nil
 	}
-	cvss.BaseScore = f.CVSSScore
-	cvss.BaseSeverity = severityLabel(f.CVSSScore)
+	score, ok := db.BaseScoreFromVector(f.CVSSVector)
+	if !ok {
+		return nil
+	}
+	cvss.BaseScore = score
+	cvss.BaseSeverity = severityLabel(score)
 	cvss.VectorString = f.CVSSVector
 	return &csafScore{Products: productIDs, CVSSv3: cvss}
 }

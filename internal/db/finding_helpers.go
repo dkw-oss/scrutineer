@@ -2,6 +2,7 @@ package db
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,11 +31,40 @@ func WriteFindingField(gdb *gorm.DB, findingID uint, field, newValue string, sou
 	if err := gdb.Model(&Finding{}).Where("id = ?", f.ID).Update(colName, newValue).Error; err != nil {
 		return fmt.Errorf("update %s: %w", colName, err)
 	}
-	return gdb.Create(&FindingHistory{
+	if err := gdb.Create(&FindingHistory{
 		FindingID: f.ID,
 		Field:     field,
 		OldValue:  old,
 		NewValue:  newValue,
+		Source:    source,
+		By:        by,
+		CreatedAt: time.Now(),
+	}).Error; err != nil {
+		return err
+	}
+	if field == "cvss_vector" {
+		return syncCVSSScore(gdb, &f, newValue, source, by)
+	}
+	return nil
+}
+
+// syncCVSSScore keeps cvss_score in lock-step with cvss_vector. The
+// vector is the canonical input (analyst form, disclose skill), the
+// score is a pure function of it — anything else drifts. An empty or
+// unparseable vector clears the score so stale numbers don't linger.
+func syncCVSSScore(gdb *gorm.DB, f *Finding, vector string, source FindingSource, by string) error {
+	score, _ := BaseScoreFromVector(vector)
+	if f.CVSSScore == score {
+		return nil
+	}
+	if err := gdb.Model(&Finding{}).Where("id = ?", f.ID).Update("cvss_score", score).Error; err != nil {
+		return fmt.Errorf("update cvss_score: %w", err)
+	}
+	return gdb.Create(&FindingHistory{
+		FindingID: f.ID,
+		Field:     "cvss_score",
+		OldValue:  strconv.FormatFloat(f.CVSSScore, 'f', -1, 64),
+		NewValue:  strconv.FormatFloat(score, 'f', -1, 64),
 		Source:    source,
 		By:        by,
 		CreatedAt: time.Now(),
