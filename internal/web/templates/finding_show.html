@@ -40,6 +40,23 @@
       {{if $u}}<a href="{{$u}}" target="_blank" rel="noopener" class="underline underline-offset-2">
         <code>{{$f.Location}}</code></a>
       {{else}}<code>{{$f.Location}}</code>{{end}}
+      {{if $f.ExtraLocationCount}}
+      <details class="mt-2">
+        <summary class="cursor-pointer text-muted-foreground">
+          {{$f.ExtraLocationCount}} more location{{if ne $f.ExtraLocationCount 1}}s{{end}}
+        </summary>
+        <ul class="mt-1 space-y-0.5">
+          {{range $i, $loc := $f.LocationList}}{{if $i}}
+          <li>
+            {{$lu := locurl $repo.HTMLURL $scan.Commit $loc}}
+            {{if $lu}}<a href="{{$lu}}" target="_blank" rel="noopener"
+              class="underline underline-offset-2"><code class="text-xs">{{$loc}}</code></a>
+            {{else}}<code class="text-xs">{{$loc}}</code>{{end}}
+          </li>
+          {{end}}{{end}}
+        </ul>
+      </details>
+      {{end}}
     </dd>
   </div>
   <div>
@@ -197,6 +214,43 @@
     <section class="pb-4 prose">{{md $f.Rating}}</section>
   </details>
   {{end}}
+
+  <details open class="group border-b">
+    <summary class="w-full outline-none rounded-md focus-visible:ring-ring/50 focus-visible:ring-[3px]">
+      <h3 class="flex flex-1 items-center justify-between gap-4 py-4 text-sm font-medium hover:underline">
+        Dependent exposure
+        <span class="text-muted-foreground ml-auto mr-2 text-xs">{{len .Exposures}}</span>
+        <i data-lucide="chevron-down" class="text-muted-foreground size-4 shrink-0 transition-transform duration-200 group-open:rotate-180"></i>
+      </h3>
+    </summary>
+    <section class="pb-4 grid gap-3">
+      <div class="flex items-center gap-2">
+        <form method="post" action="/findings/{{$f.ID}}/exposure" hx-post="/findings/{{$f.ID}}/exposure" hx-swap="none">
+          <button type="submit" class="btn-sm">Run exposure on top-10 dependents</button>
+        </form>
+        <span class="text-xs text-muted-foreground">Clones each dependent and audits whether this finding is reachable in its code.</span>
+      </div>
+      {{if .Exposures}}
+      <table class="w-full text-sm">
+        <thead class="text-xs text-muted-foreground">
+          <tr><th class="text-left py-2">Dependent</th><th class="text-left">Status</th><th class="text-left">Justification</th><th class="text-left">Notes</th></tr>
+        </thead>
+        <tbody>
+          {{range .Exposures}}
+          <tr class="border-t align-top">
+            <td class="py-2"><code>{{.Dep.Name}}</code> <span class="text-xs text-muted-foreground">{{.Dep.Ecosystem}}</span></td>
+            <td>{{.Status}}</td>
+            <td>{{if .Justif}}<code class="text-xs">{{.Justif}}</code>{{else}}-{{end}}</td>
+            <td class="text-xs text-muted-foreground">{{.Why}}</td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+      {{else}}
+      <p class="text-xs text-muted-foreground">No exposure runs yet.</p>
+      {{end}}
+    </section>
+  </details>
 
   {{if .Patch}}{{$p := .Patch}}{{$ps := .PatchScan}}
   <details open class="group border-b">

@@ -176,8 +176,11 @@ func (s *Server) apiListFindings(w http.ResponseWriter, r *http.Request) {
 	}
 	// Direct subquery; GORM's Joins("Scan") aliasing doesn't round-trip on
 	// sqlite when the joined struct has its own relations.
-	q := s.DB.Where("scan_id IN (?)", s.DB.Model(&db.Scan{}).Select("id").Where("repository_id = ?", id)).
-		Order("id desc")
+	scans := s.DB.Model(&db.Scan{}).Select("id").Where("repository_id = ?", id)
+	if skill := r.URL.Query().Get("skill"); skill != "" {
+		scans = scans.Where("skill_name = ?", skill)
+	}
+	q := s.DB.Where("scan_id IN (?)", scans).Order("id desc")
 	if sev := r.URL.Query().Get("severity"); sev != "" {
 		q = q.Where("severity = ?", sev)
 	}

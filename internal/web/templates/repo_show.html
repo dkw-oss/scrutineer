@@ -51,6 +51,11 @@
         Findings <span class="badge-destructive ml-1">{{len .Findings}}</span>
       </button>
     {{end}}
+    {{if .ScannerFindings}}
+      <button type="button" role="tab" id="rt11" aria-controls="rp11" aria-selected="false">
+        Scanners <span class="badge-outline ml-1">{{len .ScannerFindings}}</span>
+      </button>
+    {{end}}
     {{if .Pkgs}}
     <button type="button" role="tab" id="rt6" aria-controls="rp6" aria-selected="false">
       Packages
@@ -161,7 +166,10 @@
               <td>{{template "severity-badge" .Severity}}</td>
               <td class="min-w-0 whitespace-normal"><a href="/findings/{{.ID}}">{{.Title}}</a></td>
               <td>{{template "finding-status" (fstatus .Status)}}</td>
-              <td class="whitespace-normal"><code class="text-xs break-all">{{.Location}}</code></td>
+              <td class="whitespace-normal">
+                <code class="text-xs break-all">{{.Location}}</code>
+                {{with .ExtraLocationCount}}<span class="ml-1 rounded bg-muted px-1 text-xs text-muted-foreground">+{{.}}</span>{{end}}
+              </td>
             </tr>
           {{end}}
           </tbody>
@@ -175,8 +183,9 @@
   {{if .Findings}}
   <div role="tabpanel" id="rp4" aria-labelledby="rt4" hidden>
     <p class="text-sm text-muted-foreground mb-4">
-      All open findings for this repository across {{len .Scans}} scan{{if ne (len .Scans) 1}}s{{end}}.
-      Rejected and duplicate findings are hidden.
+      Open findings from the security-deep-dive audit.
+      Rejected and duplicate findings are hidden.{{if .ScannerFindings}} See the
+      Scanners tab for zizmor/semgrep output.{{end}}
     </p>
     <div class="grid gap-4">
       {{range .Findings}}
@@ -187,6 +196,39 @@
               {{template "finding-status" (fstatus .Status)}}
               <h3><a href="/findings/{{.ID}}">{{.Title}}</a></h3>
               {{if .CWE}}<span class="badge-outline ml-auto" data-tooltip="{{cwename .CWE}}">{{.CWE}}</span>{{end}}
+            </div>
+            <p>
+              <code class="text-xs">{{.Location}}</code>
+              {{with .ExtraLocationCount}}<span class="ml-1 rounded bg-muted px-1 text-xs text-muted-foreground">+{{.}}</span>{{end}}
+              <span class="text-xs text-muted-foreground">&middot; scan <a class="hover:underline" href="/scans/{{.ScanID}}">#{{.ScanID}}</a></span>
+            </p>
+          </header>
+          <section class="text-sm">
+            <p class="line-clamp-3">{{.Summary}}</p>
+          </section>
+        </div>
+      {{end}}
+    </div>
+  </div>
+  {{end}}
+
+  {{if .ScannerFindings}}
+  <div role="tabpanel" id="rp11" aria-labelledby="rt11" hidden>
+    <p class="text-sm text-muted-foreground mb-4">
+      Findings from tool-style scanners (zizmor, semgrep). These run as their
+      own skills and are kept separate from the curated deep-dive output.
+    </p>
+    <div class="grid gap-4">
+      {{$skills := .ScanSkill}}
+      {{range .ScannerFindings}}
+        <div id="finding-card-{{.ID}}" class="card">
+          <header>
+            <div class="flex items-center gap-2">
+              {{template "severity-badge" .Severity}}
+              {{template "finding-status" (fstatus .Status)}}
+              <h3><a href="/findings/{{.ID}}">{{.Title}}</a></h3>
+              <span class="badge-outline ml-auto">{{index $skills .ScanID}}</span>
+              {{if .CWE}}<span class="badge-outline" data-tooltip="{{cwename .CWE}}">{{.CWE}}</span>{{end}}
             </div>
             <p>
               <code class="text-xs">{{.Location}}</code>
@@ -339,6 +381,17 @@
   </div>
 
   <div role="tabpanel" id="rp3" aria-labelledby="rt3" hidden>
+    {{if gt .FailedScans 0}}
+      <div class="flex justify-end mb-2">
+        <form method="post" action="/scans/retry-failed?repository={{.Repo.ID}}"
+              hx-post="/scans/retry-failed?repository={{.Repo.ID}}" hx-swap="none"
+              hx-confirm="Re-enqueue every failed scan on this repository?">
+          <button type="submit" class="btn-outline">
+            <i data-lucide="refresh-cw"></i> Retry failed ({{.FailedScans}})
+          </button>
+        </form>
+      </div>
+    {{end}}
     <table class="table">
       <thead>
         <tr><th>#</th><th>Skill</th><th>Status</th><th>Findings</th><th>Model</th><th>Cost</th><th>Commit</th><th>Started</th><th>Duration</th><th class="w-12"></th></tr>

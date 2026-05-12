@@ -2,57 +2,47 @@
 
 ## Project layout
 
-    cmd/scrutineer/          main entry point, flag + config wiring
-    internal/config/         YAML config loader (see scrutineer.sample.yaml)
-    internal/db/             GORM models + helpers:
-      db.go                  Repository, Scan, Skill, Finding + sibling tables
-                             (FindingLabel, FindingNote, FindingCommunication,
-                              FindingReference, FindingHistory), Dependency,
-                              Package, Dependent, Advisory, Maintainer,
-                              Subproject, SBOMUpload, SBOMPackage, CNA
-      finding_helpers.go     WriteFindingField, AddFindingNote,
-                             AddFindingCommunication, AddFindingReference,
-                             SetFindingLabels, SeedDefaultLabels
-    internal/queue/          goqite wrapper, embedded sqlite schema
-    internal/skills/         SKILL.md parser + loader for local dirs and
-                             remote git repos
-    internal/worker/         one job kind (JobSkill) and the runner plumbing:
-      claude.go              LocalClaude runner (bare-metal)
-      docker.go              DockerRunner (ephemeral container per scan)
-      clone.go               git clone/fetch helpers, URL validation
-      skill.go               doSkill: stage skill + context, invoke claude,
-                             dispatch output to the right parser
-      skill_parsers.go       one parser per output_kind: findings, maintainers,
-                             packages, advisories, dependents, dependencies,
-                             repo_metadata, verify
-      stream.go              claude stream-json line parser
-      findings.go            structured report parser used by output_kind=findings
-      metadata.go            FetchPackagesByPURL helper used by the web import button
-    internal/web/            HTTP handlers, templates, static assets, SSE broker
-      server.go              browser routes + handlers + template funcs
-      api.go                 skill-facing /api router + bearer-auth middleware
-      api_reads.go           typed read endpoints (maintainers, packages,
-                             advisories, dependents, dependencies, findings)
-      api_finding_writes.go  PATCH/POST/PUT for finding notes, communications,
-                             references, labels, field updates, history
-      finding_forms.go       browser-form analogues of the api finding writes
-      finding_patch.go       patch scan lookup and diff download
-      skills_handlers.go     /skills UI routes
-      repo_report.go         markdown report export per repository
-      org_report.go          markdown report export per organisation
-      org_summary.go         organisation summary page
-      sboms.go               SBOM upload, list, and component resolution
-      usage.go               per-skill token and cost totals
-      theme.go               colour scheme cookie + dark mode toggle
-      parse_repo_url.go      git URL to forge web URL conversion
-      api_export.go          bulk JSON export endpoints
-      sse.go                 SSE broker, splits data lines per spec
-      cwe.go + cwe.json      embedded MITRE CWE catalogue (944 entries)
-      models.go              model pick list, swappable from config
-      location.go            forge URL builder for source links
-      jsontree.go            JSON-to-HTML renderer for the Data tab
-      templates/             html/template files
-      static/                theme CSS, app.js, favicon
+| Path | Description |
+| --- | --- |
+| `cmd/scrutineer/` | main entry point, flag + config wiring |
+| `internal/config/` | YAML config loader (see `scrutineer.sample.yaml`) |
+| `internal/db/` | GORM models + helpers |
+| `internal/db/db.go` | Repository, Scan, Skill, Finding + sibling tables (FindingLabel, FindingNote, FindingCommunication, FindingReference, FindingHistory), Dependency, Package, Dependent, Advisory, Maintainer, Subproject, SBOMUpload, SBOMPackage, CNA |
+| `internal/db/finding_helpers.go` | WriteFindingField, AddFindingNote, AddFindingCommunication, AddFindingReference, SetFindingLabels, SeedDefaultLabels |
+| `internal/queue/` | goqite wrapper, embedded sqlite schema |
+| `internal/skills/` | SKILL.md parser + loader for local dirs and remote git repos |
+| `internal/worker/` | one job kind (JobSkill) and the runner plumbing |
+| `internal/worker/claude.go` | LocalClaude runner (bare-metal) |
+| `internal/worker/docker.go` | DockerRunner (ephemeral container per scan) |
+| `internal/worker/clone.go` | git clone/fetch helpers, URL validation |
+| `internal/worker/skill.go` | doSkill: stage skill + context, invoke claude, dispatch output to the right parser |
+| `internal/worker/skill_parsers.go` | one parser per output_kind: findings, maintainers, packages, advisories, dependents, dependencies, repo_metadata, verify |
+| `internal/worker/stream.go` | claude stream-json line parser |
+| `internal/worker/findings.go` | structured report parser used by `output_kind=findings` |
+| `internal/worker/metadata.go` | FetchPackagesByPURL helper used by the web import button |
+| `internal/web/` | HTTP handlers, templates, static assets, SSE broker |
+| `internal/web/server.go` | browser routes + handlers + template funcs |
+| `internal/web/api.go` | skill-facing `/api` router + bearer-auth middleware |
+| `internal/web/api_reads.go` | typed read endpoints (maintainers, packages, advisories, dependents, dependencies, findings) |
+| `internal/web/api_finding_writes.go` | PATCH/POST/PUT for finding notes, communications, references, labels, field updates, history |
+| `internal/web/finding_forms.go` | browser-form analogues of the api finding writes |
+| `internal/web/finding_patch.go` | patch scan lookup and diff download |
+| `internal/web/skills_handlers.go` | `/skills` UI routes |
+| `internal/web/repo_report.go` | markdown report export per repository |
+| `internal/web/org_report.go` | markdown report export per organisation |
+| `internal/web/org_summary.go` | organisation summary page |
+| `internal/web/sboms.go` | SBOM upload, list, and component resolution |
+| `internal/web/usage.go` | per-skill token and cost totals |
+| `internal/web/theme.go` | colour scheme cookie + dark mode toggle |
+| `internal/web/parse_repo_url.go` | git URL to forge web URL conversion |
+| `internal/web/api_export.go` | bulk JSON export endpoints |
+| `internal/web/sse.go` | SSE broker, splits data lines per spec |
+| `internal/web/cwe.go` + `cwe.json` | embedded MITRE CWE catalogue (944 entries) |
+| `internal/web/models.go` | model pick list, swappable from config |
+| `internal/web/location.go` | forge URL builder for source links |
+| `internal/web/jsontree.go` | JSON-to-HTML renderer for the Data tab |
+| `internal/web/templates/` | html/template files |
+| `internal/web/static/` | theme CSS, app.js, favicon, vendored CDN assets |
 
 ## Running tests
 
@@ -68,31 +58,11 @@ The full quality sweep:
 
 ## Adding a new scan type
 
-Scans are claude-code skills on disk. Adding one is a directory drop, no Go change. See [agentskills.io](https://agentskills.io/specification) for the SKILL.md format.
-
-1. Create `skills/my-skill/SKILL.md` with YAML frontmatter (`name`, `description`, optional `license`/`compatibility`/`metadata`). Scrutineer-specific metadata keys tell the worker how to handle the output:
-
-   ```yaml
-   ---
-   name: my-skill
-   description: Summarises the repository's build outputs.
-   metadata:
-     scrutineer.output_file: report.json
-     scrutineer.output_kind: freeform
-   ---
-   ```
-
-2. Write the body: instructions for claude. Reference the skill-facing API when the skill needs context scrutineer already holds (prior scans, maintainers, packages, etc.). See `openapi.yaml` at the repo root.
-
-3. Optional: `scripts/` for bundled helpers, `schema.json` for output validation.
-
-4. Restart scrutineer; the skill loader picks it up on startup. No code change.
-
-When a scan runs, the worker stages the skill into `work/{scanID}/.claude/skills/{name}/`, writes a `context.json` with the repo identity plus `scrutineer.api_base` and `scrutineer.token`, and invokes `claude -p "Use the {name} skill..."`. The skill's output goes to `./report.json` (or whatever `output_file` names) and scrutineer's parser for the declared `output_kind` handles it.
+Scans are claude-code skills on disk; adding one is a directory drop, no Go change. The frontmatter reference, `scrutineer.*` metadata keys, output kinds, workspace layout, `context.json` shape, and schema validation are documented in [skills.md](skills.md).
 
 ### When you do need Go changes
 
-- **New output kind** (row shape not already one of `findings`, `maintainers`, `packages`, `advisories`, `dependents`, `dependencies`, `repo_metadata`, `freeform`, `verify`): add a `parseXOutput` method in `internal/worker/skill_parsers.go` and a case in the switch in `internal/worker/skill.go`.
+- **New output kind**: add the kind to `OutputKinds` in `internal/skills/parse.go`, add a `parseXOutput` method in `internal/worker/skill_parsers.go`, and add a case to the switch in `internal/worker/skill.go`. Without the `OutputKinds` entry the bundled-skills test rejects the SKILL.md at startup.
 - **New API surface** for skills to read: add a handler in `internal/web/api_reads.go` and a route in `internal/web/api.go`, then document it in `openapi.yaml`.
 
 ## Regenerating cwe.json
@@ -101,6 +71,12 @@ The CWE catalogue is distilled from MITRE's CSV download:
 
     curl -sS https://cwe.mitre.org/data/csv/1000.csv.zip | funzip > /tmp/cwe.csv
     python3 -c 'import csv,json; print(json.dumps({"CWE-"+r["CWE-ID"]:{"name":r["Name"],"description":r["Description"].strip()} for r in csv.DictReader(open("/tmp/cwe.csv"))}, separators=(",",":"), sort_keys=True))' > internal/web/cwe.json
+
+## Frontend assets
+
+Tailwind, basecoat, htmx, lucide and highlight.js are vendored under `internal/web/static/vendor/` and embedded into the binary so the UI works offline. To bump a version, edit the pinned URL in `scripts/vendor-assets.sh`, re-run it, update the matching filename in `internal/web/templates/layout.html`, and commit the changed files.
+
+    ./scripts/vendor-assets.sh
 
 ## SSE architecture
 

@@ -51,8 +51,12 @@ func renderOrgReport(gdb *gorm.DB, owner string, repos []db.Repository) string {
 	for _, r := range repos {
 		repoIDs = append(repoIDs, r.ID)
 	}
+	// Org report mirrors what the UI shows: deep-dive findings only.
+	// Scanner output (zizmor, semgrep) lives in each repo's Scanners tab
+	// and would dominate the totals if rolled in here.
 	var findings []db.Finding
 	gdb.Where("repository_id IN ?", repoIDs).
+		Where("scan_id IN (?)", deepDiveScanIDs(gdb)).
 		Order("severity, id").Find(&findings)
 
 	bySeverity := map[string]int{}

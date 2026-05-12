@@ -20,7 +20,8 @@ import (
 )
 
 const (
-	JobSkill = "skill"
+	JobSkill    = "skill"
+	JobExposure = "exposure"
 
 	PrioScan     = 0
 	PrioFinding  = 2
@@ -43,9 +44,19 @@ type Worker struct {
 	Runner      SkillRunner
 	OnEvent     func(scanID, repoID uint, name, data string) // optional SSE bridge
 	ScanTimeout time.Duration
+	// SchemaStrict makes a report.json that fails validation against the
+	// skill's schema.json fail the scan. When false the validator output
+	// is emitted to the log and the kind-specific parser still runs.
+	SchemaStrict bool
 
 	mu      sync.Mutex
 	running map[uint]context.CancelFunc
+
+	// cacheMu serialises clone/fetch on the dependent-clone cache per
+	// URL. A Mutex per URL keeps two exposure scans from racing inside
+	// the same physical dir while leaving scans of different
+	// dependents free to run in parallel.
+	cacheMu sync.Map
 }
 
 // Cancel aborts an in-flight scan. Returns true if a running job was found and
@@ -74,6 +85,7 @@ func (w *Worker) workRoot(scanID uint) string {
 
 func (w *Worker) Register(q *queue.Queue) {
 	q.Register(JobSkill, w.wrap(w.doSkill))
+	q.Register(JobExposure, w.wrap(w.doExposure))
 }
 
 // handler does the actual work for one job kind. It receives the loaded scan
@@ -118,10 +130,9 @@ func (w *Worker) wrap(h handler) func(context.Context, []byte) error {
 			w.mu.Unlock()
 		}()
 
-		now := time.Now()
 		scan.Status = db.ScanRunning
 		scan.StatusPriority = db.StatusPriorityFor(db.ScanRunning)
-		scan.StartedAt = &now
+		scan.StartedAt = new(time.Now())
 		scan.Log = ""
 		scan.Error = ""
 		if err := w.DB.Save(&scan).Error; err != nil {
@@ -145,8 +156,7 @@ func (w *Worker) wrap(h handler) func(context.Context, []byte) error {
 
 		report, err := h(ctx, &scan, emit)
 
-		fin := time.Now()
-		scan.FinishedAt = &fin
+		scan.FinishedAt = new(time.Now())
 		switch {
 		case errors.Is(ctx.Err(), context.DeadlineExceeded):
 			scan.Status = db.ScanFailed
@@ -166,6 +176,10 @@ func (w *Worker) wrap(h handler) func(context.Context, []byte) error {
 				scan.Report = report
 				scan.Error = err.Error()
 				emit(Event{Kind: KindError, Text: err.Error()})
+			} else if _, ok := errors.AsType[*SchemaValidationError](err); ok {
+				scan.Status = db.ScanFailed
+				scan.Report = report
+				scan.Error = err.Error()
 			} else {
 				scan.Status = db.ScanFailed
 				scan.Error = err.Error()

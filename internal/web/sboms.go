@@ -133,8 +133,12 @@ func (s *Server) sbomShow(w http.ResponseWriter, r *http.Request) {
 	var findings []db.Finding
 	var advisories []db.Advisory
 	if len(repoIDs) > 0 {
+		// Deep-dive findings only — the SBOM "Findings" tab is a
+		// downstream-impact view, where lint output from per-repo scanners
+		// (zizmor, semgrep) would be misleading at this level.
 		q := s.DB.Where("repository_id IN ? AND status NOT IN ?", repoIDs,
-			[]db.FindingLifecycle{db.FindingRejected, db.FindingDuplicate})
+			[]db.FindingLifecycle{db.FindingRejected, db.FindingDuplicate}).
+			Where("scan_id IN (?)", deepDiveScanIDs(s.DB))
 		if sev := r.URL.Query().Get("severity"); sev != "" {
 			q = q.Where("severity = ?", sev)
 		}

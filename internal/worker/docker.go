@@ -43,9 +43,15 @@ func (d DockerRunner) image() string {
 // Egress is routed through scrutineer's allowlisting proxy on the host;
 // see EgressProxy. tmpfs/cap-drop rules mirror the local runner's intent.
 func (d DockerRunner) RunSkill(ctx context.Context, sj SkillJob, emit func(Event)) (SkillResult, error) {
-	src, err := ensureClone(ctx, sj.Repo, sj.WorkRoot, d.FullClone, sj.Ref, emit)
-	if err != nil {
-		return SkillResult{}, err
+	var src string
+	if sj.SrcReady {
+		src = filepath.Join(sj.WorkRoot, "src")
+	} else {
+		var err error
+		src, err = ensureClone(ctx, sj.Repo, sj.WorkRoot, d.FullClone, sj.Ref, emit)
+		if err != nil {
+			return SkillResult{}, err
+		}
 	}
 	commit := gitHead(src)
 	work := sj.WorkRoot
@@ -68,6 +74,8 @@ func (d DockerRunner) RunSkill(ctx context.Context, sj SkillJob, emit func(Event
 		"--cap-drop", "ALL",
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
 		"-e", "HOME=/tmp",
+		"-e", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+		"-e", "SEMGREP_SEND_METRICS=off",
 		"--tmpfs", "/tmp:rw,noexec,nosuid,size=256m",
 		"-v", absWork + ":/work",
 		"-w", "/work",

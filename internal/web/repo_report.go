@@ -174,8 +174,13 @@ func writeReportThreatModel(b *strings.Builder, scan *db.Scan, tm map[string]any
 
 func writeReportFindings(b *strings.Builder, gdb *gorm.DB, repoID uint, latest *db.Scan) {
 	fmt.Fprintf(b, "## Findings\n\n")
+	// Mirrors the repo page Findings tab: deep-dive output only. Scanner
+	// findings (zizmor, semgrep) belong to the Scanners tab and stay out of
+	// the curated report so download recipients don't drown in lint noise.
 	var findings []db.Finding
-	gdb.Where("repository_id = ?", repoID).Order("severity, id").Find(&findings)
+	gdb.Where("repository_id = ?", repoID).
+		Where("scan_id IN (?)", deepDiveScanIDs(gdb)).
+		Order("severity, id").Find(&findings)
 	if len(findings) == 0 {
 		fmt.Fprintf(b, "No findings recorded for this repository.\n\n")
 		return

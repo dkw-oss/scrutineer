@@ -239,14 +239,13 @@ func runSkillWithFinding(t *testing.T, outputKind, report string, startStatus db
 	gdb.Create(&finding)
 	skill := db.Skill{Name: "verify", Description: "d", Body: "b", OutputFile: "report.json", OutputKind: outputKind, Version: 1, Active: true, Source: "ui"}
 	gdb.Create(&skill)
-	fid := finding.ID
 	scan := db.Scan{
 		RepositoryID: repo.ID,
 		Kind:         JobSkill,
 		Status:       db.ScanQueued,
 		Model:        "fake",
 		SkillID:      &skill.ID,
-		FindingID:    &fid,
+		FindingID:    new(finding.ID),
 	}
 	gdb.Create(&scan)
 

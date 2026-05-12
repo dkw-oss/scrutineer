@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -128,6 +129,66 @@ func TestFindingCSAF_omitsCVEWhenAbsent(t *testing.T) {
 	}
 }
 
+func TestFindingCSAF_perDependentVEX(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	f := seedCSAFFinding(t, s, nil)
+	depAffected := db.Dependent{RepositoryID: f.RepositoryID, Name: "downstream-affected", PURL: "pkg:npm/downstream-affected@1.0.0", LatestVersion: "1.0.0"}
+	depSafe := db.Dependent{RepositoryID: f.RepositoryID, Name: "downstream-safe", PURL: "pkg:npm/downstream-safe@2.0.0", LatestVersion: "2.0.0"}
+	s.DB.Create(&depAffected)
+	s.DB.Create(&depSafe)
+	s.DB.Create(&db.FindingDependent{FindingID: f.ID, DependentID: depAffected.ID, Status: db.ExposureKnownAffected})
+	s.DB.Create(&db.FindingDependent{FindingID: f.ID, DependentID: depSafe.ID,
+		Status: db.ExposureKnownNotAffected, Justification: db.JustifVulnerableCodeNotInPath})
+
+	w := getCSAF(t, s, f.ID)
+	if w.Code != 200 {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+	doc := decodeCSAF(t, w.Body.Bytes())
+	v := doc["vulnerabilities"].([]any)[0].(map[string]any)
+	ps := v["product_status"].(map[string]any)
+
+	affected := toStringSlice(ps["known_affected"])
+	if !slices.Contains(affected, "DEP-"+strconv.FormatUint(uint64(depAffected.ID), 10)) {
+		t.Errorf("known_affected missing DEP-%d: %+v", depAffected.ID, affected)
+	}
+	notAffected := toStringSlice(ps["known_not_affected"])
+	if !slices.Contains(notAffected, "DEP-"+strconv.FormatUint(uint64(depSafe.ID), 10)) {
+		t.Errorf("known_not_affected missing DEP-%d: %+v", depSafe.ID, notAffected)
+	}
+
+	flags := v["flags"].([]any)
+	var sawJustif bool
+	for _, raw := range flags {
+		flag := raw.(map[string]any)
+		if flag["label"] == db.JustifVulnerableCodeNotInPath {
+			sawJustif = true
+			if !slices.Contains(toStringSlice(flag["product_ids"]), "DEP-"+strconv.FormatUint(uint64(depSafe.ID), 10)) {
+				t.Errorf("justification flag missing dependent id: %+v", flag)
+			}
+		}
+	}
+	if !sawJustif {
+		t.Errorf("expected a %s flag, got %+v", db.JustifVulnerableCodeNotInPath, flags)
+	}
+}
+
+func toStringSlice(v any) []string {
+	xs, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(xs))
+	for _, x := range xs {
+		if s, ok := x.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 func TestFindingCSAF_rejectedMapsToNotAffected(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()
@@ -191,6 +252,51 @@ func TestFindingCSAF_404ForMissingFinding(t *testing.T) {
 	w := getCSAF(t, s, 99999)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status %d, want 404", w.Code)
+	}
+}
+
+// Older rows may carry a populated vector with a stale CVSSScore == 0
+// (the column wasn't kept in sync before #8). Export must still emit a
+// correct score so downstream consumers don't see baseScore: 0 next to
+// a CRITICAL vector.
+func TestFindingCSAF_scoreDerivedFromVectorIgnoresStoredScore(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	f := seedCSAFFinding(t, s, func(f *db.Finding) {
+		f.CVSSScore = 0
+	})
+	w := getCSAF(t, s, f.ID)
+	if w.Code != 200 {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+	doc := decodeCSAF(t, w.Body.Bytes())
+	v := doc["vulnerabilities"].([]any)[0].(map[string]any)
+	cvss := v["scores"].([]any)[0].(map[string]any)["cvss_v3"].(map[string]any)
+	if cvss["baseScore"].(float64) != 9.8 || cvss["baseSeverity"] != "CRITICAL" {
+		t.Errorf("baseScore = %v, baseSeverity = %v; want 9.8 / CRITICAL", cvss["baseScore"], cvss["baseSeverity"])
+	}
+}
+
+// parseCVSSv3Vector tolerates a truncated vector (returns a partial
+// struct) but go-cvss rejects it; the scores block must be omitted
+// rather than emitted with a fabricated baseScore: 0.
+func TestFindingCSAF_partialVectorOmitsScores(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	f := seedCSAFFinding(t, s, func(f *db.Finding) {
+		f.CVSSVector = "CVSS:3.1/AV:N/AC:L"
+		f.CVSSScore = 0
+	})
+	w := getCSAF(t, s, f.ID)
+	if w.Code != 200 {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+	doc := decodeCSAF(t, w.Body.Bytes())
+	v := doc["vulnerabilities"].([]any)[0].(map[string]any)
+	if _, ok := v["scores"]; ok {
+		t.Errorf("scores must be omitted when vector is unparseable by go-cvss: %+v", v["scores"])
 	}
 }
 

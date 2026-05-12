@@ -25,6 +25,11 @@ The central entity. One row per git URL.
 | icon_url | text | Avatar/icon URL. |
 | metadata | text | Full ecosyste.ms JSON response. Queryable with `json_extract`. |
 | fetched_at | datetime | When the metadata skill last ran. |
+| disclosure_channel | text | Preferred reporting vector (email, GHSA URL, registry owner handle, SECURITY.md URL). Written by `maintainers`/`cna-match`; analyst-editable. |
+| posture | text | Disclosure-readiness tier from the `posture` skill: `ready`, `partial`, `unprepared`. |
+| posture_summary | text | One-line explanation that goes with `posture`. |
+| fork | text | `owner/name` of the staging fork inside `-fork-org`. Written by the `fork` skill. |
+| clone_error | text | Last clone/fetch failure message; non-empty means the repo is currently unreachable. Cleared on next successful clone. |
 | created_at | datetime | |
 | updated_at | datetime | |
 
@@ -37,18 +42,26 @@ One row per skill execution. Every scan is a skill; `kind` is always `skill`. `s
 | id | integer PK | |
 | repository_id | integer FK | References `repositories.id`. Cascade delete. |
 | kind | text | Always `skill`. Retained so legacy rows from before the skill framework still render. |
-| status | text | `queued`, `running`, `done`, `failed`. Stale `running` rows are swept to `failed` on startup. |
+| status | text | `queued`, `running`, `done`, `failed`, `cancelled`. Stale `running` rows are swept to `failed` on startup. |
+| status_priority | integer | Denormalised sort key for the scans index: 0 running, 1 queued, 2 terminal. |
 | model | text | Claude model ID. |
 | skill_id | integer FK | References `skills.id`. Null for legacy non-skill rows. |
 | skill_version | integer | Version of the skill at run time; the skill row's `version` bumps on every edit so older scans stay readable. |
 | skill_name | text | Denormalised skill name for UI display. |
-| finding_id | integer FK | Set when the scan is finding-scoped (verify/patch/disclose). References `findings.id`. |
+| finding_id | integer FK | Set when the scan is finding-scoped (verify/patch/disclose/exposure). References `findings.id`. |
+| dependent_id | integer FK | Set on `exposure` scans only. References `dependents.id`; identifies which downstream consumer the skill is auditing for reachability of the upstream finding. |
 | api_token | text | Per-scan bearer token that the skill presents when calling `/api`. Only valid while the scan is running. |
+| ref | text | Git ref to checkout after cloning. Empty means the default branch. |
+| sub_path | text | Scopes code analysis to a sub-folder of the clone (monorepo packages). Empty means repo root. |
 | commit | text | Git HEAD at scan time. |
 | started_at | datetime | |
 | finished_at | datetime | |
 | cost_usd | real | From claude's `total_cost_usd` in stream-json result. |
 | turns | integer | Number of claude turns. |
+| input_tokens | integer | Input tokens billed. |
+| output_tokens | integer | Output tokens billed. |
+| cache_read_tokens | integer | `cache_read_input_tokens` from the result event. |
+| cache_write_tokens | integer | `cache_creation_input_tokens` from the result event. |
 | prompt | text | Activation prompt sent to claude. The skill body lives in the Skill row, not here. |
 | report | text | The skill's primary output. JSON for parsed kinds, freeform for everything else. |
 | log | text | Line-by-line transcript of the scan. Streamed to the UI via SSE. |
@@ -73,7 +86,7 @@ One row per installed skill. Loaded from `skills/` directories on disk or the UI
 | body | text | Markdown body after the frontmatter. The prompt. |
 | schema_json | text | Optional schema.json contents. |
 | output_file | text | Relative path the skill writes to. Promoted from metadata. |
-| output_kind | text | Parser key: `findings`, `maintainers`, `packages`, `advisories`, `dependents`, `dependencies`, `repo_metadata`, `verify`, `freeform`. Promoted from metadata. |
+| output_kind | text | Parser key: `findings`, `maintainers`, `packages`, `advisories`, `dependents`, `dependencies`, `repo_metadata`, `repo_overview`, `subprojects`, `posture`, `verify`, `patch`, `threat_model`, `exposure`, `freeform`. Promoted from metadata. |
 | version | integer | Bumps on every save. |
 | active | boolean | |
 | source | text | `local`, `remote`, or `ui`. |
@@ -92,17 +105,28 @@ One row per vulnerability. Lifecycle columns are mutated through `db.WriteFindin
 | scan_id | integer FK | The scan that first produced this finding. Cascade delete. |
 | repository_id | integer FK | Denormalised from scan so list queries skip the join. |
 | commit | text | Denormalised from scan. |
+| sub_path | text | Denormalised from scan; sub-folder the finding's `location` is relative to. |
+| fingerprint | text | Content hash for cross-scan dedupe; `(repository_id, fingerprint)` is indexed. |
+| last_seen_scan_id | integer | Most recent scan that re-observed this fingerprint. |
+| last_seen_commit | text | Commit at re-observation. |
+| seen_count | integer | Total times re-observed across rescans. |
+| missed_count | integer | Consecutive same-skill rescans where the fingerprint did not reappear; reset on next re-observation. Non-zero is a hint the issue may be fixed upstream. |
+| last_missed_scan_id | integer | Scan where it most recently went missing. |
 | finding_id | text | ID within the originating report, e.g. `F1`. |
 | sinks | text | Comma-joined sink IDs. Links to the threat model tab. |
 | title | text | |
 | severity | text | `Critical`, `High`, `Medium`, `Low`. |
+| confidence | text | `high`, `medium`, `low`; how certain the audit is. |
 | status | text | Lifecycle state: `new`, `enriched`, `triaged`, `ready`, `reported`, `acknowledged`, `fixed`, `published`, `rejected`, `duplicate`. |
 | cwe | text | e.g. `CWE-352`. Tooltips come from the embedded MITRE catalogue. |
-| location | text | `file:line` or `file:start-end`. |
+| location | text | Primary `file:line` or `file:start-end`. |
+| locations | text | Newline-joined set of every `file:line` that hit the same fingerprint in this scan. `location` is the first; the rest render as a `+N` badge and an expandable list on the finding page. Empty on rows that predate the column until the next rescan. |
+| reachability | text | `reachable`, `harness_only`, `unclear`. `harness_only` is a real bug but not disclosable as a vulnerability on its own. |
+| quality_tier | text | `high` (heap overflow, UAF, type confusion, controllable write, shell/eval injection) or `low` (stack exhaustion, assertion failure, fixed-offset null deref, log injection). |
 | affected | text | Version range, e.g. `>=0.2.0, <=4.0.5`. |
 | cve_id | text | e.g. `CVE-2026-12345`. |
 | cvss_vector | text | e.g. `CVSS:3.1/AV:N/AC:L/...`. |
-| cvss_score | real | |
+| cvss_score | real | Derived from `cvss_vector` on write. Cleared when the vector is empty or unparseable. |
 | fix_version | text | |
 | fix_commit | text | |
 | resolution | text | `fix`, `migrate`, `workaround`, `adopt`, `wontfix`. |
@@ -247,6 +271,23 @@ Top runtime dependents of this repository's packages. Populated by the `dependen
 | registry_url | text | |
 | latest_version | text | |
 | created_at | datetime | |
+
+## finding_dependents
+
+One row per (finding, dependent) pair the `exposure` skill has audited. Status mirrors the CSAF 2.0 product_status buckets so the VEX export streams the value through unchanged. Upserted on each rerun; the unique index on `(finding_id, dependent_id)` prevents duplicates.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | integer PK | |
+| finding_id | integer FK | References `findings.id`. Part of the unique index. |
+| dependent_id | integer FK | References `dependents.id`. Part of the unique index. |
+| status | text | `known_affected`, `known_not_affected`, `under_investigation`, or `fixed`. |
+| justification | text | CSAF VEX flag label. Only valid when status is `known_not_affected`; cleared by the parser otherwise. |
+| rationale | text | One-paragraph explanation written by the skill, rendered in the finding page's per-dependent table. |
+| scan_id | integer FK | Exposure scan that wrote this row. |
+| scan_commit | text | HEAD of the dependent's clone when the verdict was made; lets the operator tell whether a later rescan would still apply. |
+| created_at | datetime | |
+| updated_at | datetime | |
 
 ## advisories
 

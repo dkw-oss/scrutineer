@@ -84,6 +84,8 @@ var OutputKinds = map[string]bool{
 	"repo_overview": true,
 	"posture":       true,
 	"patch":         true,
+	"threat_model":  true,
+	"exposure":      true,
 }
 
 var nameRE = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)

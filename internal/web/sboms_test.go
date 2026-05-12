@@ -233,8 +233,7 @@ func TestSBOMShow_listsAdvisories(t *testing.T) {
 	s.DB.Create(&repo)
 	s.DB.Create(&db.Advisory{RepositoryID: repo.ID, Title: "CVE-2026-9999 prototype pollution",
 		Severity: "High", CVSSScore: 7.5, URL: "https://osv.dev/CVE-2026-9999"})
-	withdrawn := time.Now()
-	s.DB.Create(&db.Advisory{RepositoryID: repo.ID, Title: "withdrawn-one", WithdrawnAt: &withdrawn})
+	s.DB.Create(&db.Advisory{RepositoryID: repo.ID, Title: "withdrawn-one", WithdrawnAt: new(time.Now())})
 
 	up := db.SBOMUpload{Name: "demo", PackageCount: 1, Packages: []db.SBOMPackage{
 		{Name: "adv-pkg", PURL: "pkg:npm/adv", RepositoryID: &repo.ID},

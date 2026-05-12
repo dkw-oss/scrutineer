@@ -112,6 +112,71 @@ func TestWriteFindingField_rejectsUnknownField(t *testing.T) {
 	}
 }
 
+func TestWriteFindingField_cvssVectorSyncsScore(t *testing.T) {
+	gdb := newTestDB(t)
+	f := seedFinding(t, gdb)
+
+	const vec = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+	if err := WriteFindingField(gdb, f.ID, "cvss_vector", vec, SourceAnalyst, "me"); err != nil {
+		t.Fatal(err)
+	}
+	var refreshed Finding
+	gdb.First(&refreshed, f.ID)
+	if refreshed.CVSSVector != vec {
+		t.Errorf("vector = %q, want %q", refreshed.CVSSVector, vec)
+	}
+	if refreshed.CVSSScore != 9.8 {
+		t.Errorf("score = %v, want 9.8", refreshed.CVSSScore)
+	}
+	var history []FindingHistory
+	gdb.Where("finding_id = ?", f.ID).Order("id").Find(&history)
+	if len(history) != 2 {
+		t.Fatalf("history len = %d, want 2 (vector + score)", len(history))
+	}
+	if history[0].Field != "cvss_vector" || history[1].Field != "cvss_score" {
+		t.Errorf("history fields = %q, %q", history[0].Field, history[1].Field)
+	}
+	if history[1].NewValue != "9.8" || history[1].Source != SourceAnalyst || history[1].By != "me" {
+		t.Errorf("score history row: %+v", history[1])
+	}
+}
+
+func TestWriteFindingField_cvssVectorInvalidClearsScore(t *testing.T) {
+	gdb := newTestDB(t)
+	f := seedFinding(t, gdb)
+	gdb.Model(&Finding{}).Where("id = ?", f.ID).Updates(map[string]any{
+		"cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+		"cvss_score":  9.8,
+	})
+
+	if err := WriteFindingField(gdb, f.ID, "cvss_vector", "garbage", SourceAnalyst, ""); err != nil {
+		t.Fatal(err)
+	}
+	var refreshed Finding
+	gdb.First(&refreshed, f.ID)
+	if refreshed.CVSSScore != 0 {
+		t.Errorf("score = %v, want 0 (vector unparseable clears stale score)", refreshed.CVSSScore)
+	}
+}
+
+func TestWriteFindingField_cvssVectorEmptyClearsScore(t *testing.T) {
+	gdb := newTestDB(t)
+	f := seedFinding(t, gdb)
+	gdb.Model(&Finding{}).Where("id = ?", f.ID).Updates(map[string]any{
+		"cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+		"cvss_score":  9.8,
+	})
+
+	if err := WriteFindingField(gdb, f.ID, "cvss_vector", "", SourceAnalyst, ""); err != nil {
+		t.Fatal(err)
+	}
+	var refreshed Finding
+	gdb.First(&refreshed, f.ID)
+	if refreshed.CVSSScore != 0 {
+		t.Errorf("score = %v, want 0", refreshed.CVSSScore)
+	}
+}
+
 func TestAddFindingNote_rejectsEmpty(t *testing.T) {
 	gdb := newTestDB(t)
 	f := seedFinding(t, gdb)

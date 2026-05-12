@@ -28,12 +28,13 @@ type skillContext struct {
 }
 
 type skillContextScrutineer struct {
-	APIBase   string `json:"api_base"`             // e.g. http://127.0.0.1:8080/api
-	ScanID    uint   `json:"scan_id"`              // the scan that owns this run
-	Token     string `json:"token"`                // bearer for api_base
-	RepoID    uint   `json:"repository_id"`        // convenience for URL building
-	SkillID   uint   `json:"skill_id,omitempty"`   // the running skill
-	FindingID uint   `json:"finding_id,omitempty"` // set for finding-scoped scans
+	APIBase     string `json:"api_base"`               // e.g. http://127.0.0.1:8080/api
+	ScanID      uint   `json:"scan_id"`                // the scan that owns this run
+	Token       string `json:"token"`                  // bearer for api_base
+	RepoID      uint   `json:"repository_id"`          // convenience for URL building
+	SkillID     uint   `json:"skill_id,omitempty"`     // the running skill
+	FindingID   uint   `json:"finding_id,omitempty"`   // set for finding-scoped scans
+	DependentID uint   `json:"dependent_id,omitempty"` // set on exposure scans
 	// ScanRef is the git ref (branch/tag) the clone was checked out to.
 	// Empty means the repository's default branch.
 	ScanRef string `json:"scan_ref,omitempty"`
@@ -133,6 +134,14 @@ func (w *Worker) doSkill(ctx context.Context, scan *db.Scan, emit func(Event)) (
 }
 
 func (w *Worker) parseSkillOutput(skill *db.Skill, scan *db.Scan, report string, emit func(Event)) error {
+	if skill.SchemaJSON != "" {
+		if detail := validateReportSchema(skill.SchemaJSON, report); detail != "" {
+			emit(Event{Kind: KindError, Text: "schema: report.json does not validate against schema.json:\n" + detail})
+			if w.SchemaStrict {
+				return &SchemaValidationError{Skill: skill.Name, Detail: detail}
+			}
+		}
+	}
 	switch skill.OutputKind {
 	case "findings":
 		return w.parseFindingsOutput(skill, scan, report, emit)
@@ -192,6 +201,7 @@ func (w *Worker) parseFindingsOutput(skill *db.Skill, scan *db.Scan, report stri
 		return err
 	}
 	findings := rep.toFindings(scan.ID, scan.RepositoryID, scan.Commit, scan.SubPath)
+	findings = groupByFingerprint(findings, scan.SkillName)
 
 	if skill.MinConfidence != "" {
 		kept := findings[:0]
@@ -215,14 +225,9 @@ func (w *Worker) parseFindingsOutput(skill *db.Skill, scan *db.Scan, report stri
 		if db.SeverityAtLeast(f.Severity, worst) || worst == "" {
 			worst = f.Severity
 		}
-		f.Fingerprint = db.FingerprintFinding(scan.SkillName, f.SubPath, f.CWE, f.Location, f.Title)
 		f.LastSeenScanID = scan.ID
 		f.LastSeenCommit = scan.Commit
 		f.SeenCount = 1
-
-		if seenThisScan[f.Fingerprint] {
-			continue
-		}
 		seenThisScan[f.Fingerprint] = true
 
 		var existing db.Finding
@@ -235,6 +240,8 @@ func (w *Worker) parseFindingsOutput(skill *db.Skill, scan *db.Scan, report stri
 				"seen_count":          existing.SeenCount + 1,
 				"missed_count":        0,
 				"last_missed_scan_id": 0,
+				"location":            f.Location,
+				"locations":           f.Locations,
 			}).Error; uerr != nil {
 				return fmt.Errorf("update finding %d: %w", existing.ID, uerr)
 			}
@@ -263,6 +270,51 @@ func (w *Worker) parseFindingsOutput(skill *db.Skill, scan *db.Scan, report stri
 		return &FailOnThresholdError{Worst: worst, Threshold: skill.FailOn}
 	}
 	return nil
+}
+
+// groupByFingerprint computes each finding's fingerprint and collapses
+// entries that share one into a single finding whose Locations column
+// carries every match position from the group (#191). Skills that
+// emit one finding per match (semgrep, zizmor) hit this path when the
+// same rule fires repeatedly in one file; pre-grouping skills emit
+// distinct fingerprints and pass through unchanged.
+func groupByFingerprint(in []db.Finding, skillName string) []db.Finding {
+	out := make([]db.Finding, 0, len(in))
+	idx := map[string]int{}
+	for _, f := range in {
+		f.Fingerprint = db.FingerprintFinding(skillName, f.SubPath, f.CWE, f.Location, f.Title)
+		if i, ok := idx[f.Fingerprint]; ok {
+			out[i].Locations = mergeLocations(out[i].Locations, f.Location, f.Locations)
+			continue
+		}
+		f.Locations = mergeLocations(f.Locations, f.Location, "")
+		idx[f.Fingerprint] = len(out)
+		out = append(out, f)
+	}
+	return out
+}
+
+// mergeLocations folds extra file:line entries into a newline-joined
+// set, dropping blanks and duplicates while preserving first-seen
+// order so the primary entry stays at the head.
+func mergeLocations(base string, more ...string) string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(s string) {
+		for _, e := range strings.Split(s, "\n") {
+			e = strings.TrimSpace(e)
+			if e == "" || seen[e] {
+				continue
+			}
+			seen[e] = true
+			out = append(out, e)
+		}
+	}
+	add(base)
+	for _, m := range more {
+		add(m)
+	}
+	return strings.Join(out, "\n")
 }
 
 // FailOnThresholdError is returned when a scan's findings include at
@@ -481,6 +533,9 @@ func stageContext(workRoot, apiBase, forkOrg string, scan *db.Scan, repo *db.Rep
 	}
 	if scan.FindingID != nil {
 		ctx.Scrutineer.FindingID = *scan.FindingID
+	}
+	if scan.DependentID != nil {
+		ctx.Scrutineer.DependentID = *scan.DependentID
 	}
 	if scan.Ref != "" {
 		ctx.Scrutineer.ScanRef = scan.Ref
