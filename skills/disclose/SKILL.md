@@ -80,7 +80,7 @@ Draft disclosure content for an existing finding in a shape that maps one-to-one
    }
    ```
 
-   Normalise the ecosystem string to the exact GHSA enum — all lowercase, with these specific spellings: `rubygems` (not `RubyGems`), `npm`, `pip` (not `pypi` or `PyPI`), `maven`, `nuget`, `composer`, `go`, `rust`, `erlang`, `actions`, `pub`, `other`. If a scrutineer package has `ecosystem: "Packagist"`, emit `"composer"`; if `"Cargo"`, emit `"rust"`. Map anything unrecognised to `"other"`.
+   Normalise the ecosystem string to the exact GHSA enum — all lowercase, with these specific spellings: `rubygems` (not `RubyGems`), `npm`, `pip` (not `pypi` or `PyPI`), `maven`, `nuget`, `composer`, `go`, `rust`, `erlang`, `actions`, `pub`, `swift`, `other`. If a scrutineer package has `ecosystem: "Packagist"`, emit `"composer"`; if `"Cargo"`, emit `"rust"`. Map anything unrecognised to `"other"`.
 
    If the repository has no packages, emit a single placeholder entry `[{"package": {"ecosystem": "other", "name": "{owner}/{repo}"}}]` and note in the `notes` field of `report.json` that this advisory is source-only. GitHub's REST endpoint rejects a body with no `vulnerabilities` entry, and the `ghsa` block in `report.json` is meant to be POSTable as-is.
 

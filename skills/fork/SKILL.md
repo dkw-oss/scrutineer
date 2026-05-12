@@ -123,7 +123,7 @@ The body shape is the GHSA create schema:
 }
 ```
 
-Build `vulnerabilities` from `GET {api_base}/repositories/{repository_id}/packages` using the same ecosystem mapping the disclose skill uses (rubygems, npm, pip, maven, nuget, composer, go, rust, erlang, actions, pub, other). If the repository has no packages, send `"vulnerabilities": [{"package": {"ecosystem": "other", "name": "{owner}/{repo}"}}]` — the endpoint requires at least one entry.
+Build `vulnerabilities` from `GET {api_base}/repositories/{repository_id}/packages` using the same ecosystem mapping the disclose skill uses (rubygems, npm, pip, maven, nuget, composer, go, rust, erlang, actions, pub, swift, other). If the repository has no packages, send `"vulnerabilities": [{"package": {"ecosystem": "other", "name": "{owner}/{repo}"}}]` — the endpoint requires at least one entry.
 
 `vulnerable_version_range` must be a bare constraint string. `finding.affected` is analyst prose; normalise it before sending:
 

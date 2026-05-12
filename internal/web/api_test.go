@@ -98,6 +98,36 @@ func TestAPIRejectsCrossRepoAccess(t *testing.T) {
 	}
 }
 
+func TestAPIGetRepository_includesPostureFields(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	repo, scan := seedRunningScan(t, s)
+
+	s.DB.Model(&repo).Updates(map[string]any{
+		"posture":         "partial",
+		"posture_summary": "SECURITY.md present, PVR disabled",
+	})
+
+	r := httptest.NewRequest("GET", "/api/repositories/"+strconv.FormatUint(uint64(repo.ID), 10), nil)
+	r.Host = testHost
+	r.Header.Set("Authorization", "Bearer "+scan.APIToken)
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatalf("status %d, want 200. body=%s", w.Code, w.Body)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body["posture"] != "partial" {
+		t.Errorf("posture = %v, want partial", body["posture"])
+	}
+	if body["posture_summary"] != "SECURITY.md present, PVR disabled" {
+		t.Errorf("posture_summary = %v", body["posture_summary"])
+	}
+}
+
 func TestAPIListsTypedReads(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()
