@@ -172,7 +172,7 @@ The token is scoped to the scan's own repository: a skill cannot read or write r
 Skills are loaded at startup from any combination of:
 
 - `-skills <dir>` (repeatable) for local directories,
-- `-skills-repo <https-url>` to clone a git repository of skills on startup,
+- `-skills-repo <owner/repo[@ref]>` (or full `https://host/path[@ref]`) to clone a git repository of skills on startup; an `@ref` suffix pins a branch, tag or commit, and the resolved SHA is stamped onto every scan. The ref must be a single segment (`main`, `v1.0`, or a SHA; not `refs/heads/main`), which leaves `https://<token>@host/...` usable for private repos,
 - the `/skills` page in the UI to create or edit a skill in the browser.
 
 A skill loaded from disk replaces any UI-edited skill of the same name on the next restart. Disable a skill on `/skills` to keep it in the database but reject any attempt to run it.

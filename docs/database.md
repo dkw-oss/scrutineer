@@ -52,6 +52,7 @@ One row per skill execution or external import. `skill_name` / `skill_version` p
 | dependent_id | integer FK | Set on `exposure` scans only. References `dependents.id`; identifies which downstream consumer the skill is auditing for reachability of the upstream finding. |
 | api_token | text | Per-scan bearer token that the skill presents when calling `/api`. Only valid while the scan is running. |
 | ref | text | Git ref to checkout after cloning. Empty means the default branch. |
+| skills_repo_sha | text | Commit of `-skills-repo` resolved at startup and stamped on every skill scan. Empty when `-skills-repo` is unset or for `import` scans. |
 | sub_path | text | Scopes code analysis to a sub-folder of the clone (monorepo packages). Empty means repo root. |
 | commit | text | Git HEAD at scan time. |
 | started_at | datetime | |

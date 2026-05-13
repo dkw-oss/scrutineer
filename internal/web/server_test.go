@@ -1539,6 +1539,49 @@ func TestEnqueueSkillWith_modelPrecedence(t *testing.T) {
 	}
 }
 
+func TestEnqueueSkillWith_stampsSkillsRepoSHA(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	s.SkillsRepoSHA = "feedface0123456789abcdef0123456789abcdef"
+
+	repo := db.Repository{URL: "https://github.com/foo/bar", Name: "bar"}
+	s.DB.Create(&repo)
+	skill := db.Skill{Name: "lite", Body: "b", OutputFile: "r.json", OutputKind: "freeform",
+		Version: 1, Active: true, Source: "ui"}
+	s.DB.Create(&skill)
+
+	scanID, err := s.enqueueSkillWith(context.Background(), repo.ID, skill.ID, ScanOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sc db.Scan
+	s.DB.First(&sc, scanID)
+	if sc.SkillsRepoSHA != s.SkillsRepoSHA {
+		t.Errorf("scan.SkillsRepoSHA = %q, want %q", sc.SkillsRepoSHA, s.SkillsRepoSHA)
+	}
+}
+
+func TestEnqueueSkillWith_emptySkillsRepoSHAByDefault(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	repo := db.Repository{URL: "https://github.com/foo/bar", Name: "bar"}
+	s.DB.Create(&repo)
+	skill := db.Skill{Name: "lite", Body: "b", OutputFile: "r.json", OutputKind: "freeform",
+		Version: 1, Active: true, Source: "ui"}
+	s.DB.Create(&skill)
+
+	scanID, err := s.enqueueSkillWith(context.Background(), repo.ID, skill.ID, ScanOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sc db.Scan
+	s.DB.First(&sc, scanID)
+	if sc.SkillsRepoSHA != "" {
+		t.Errorf("scan.SkillsRepoSHA = %q, want empty", sc.SkillsRepoSHA)
+	}
+}
+
 func TestEnqueueSkillWith_findingScopedJumpsQueue(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()

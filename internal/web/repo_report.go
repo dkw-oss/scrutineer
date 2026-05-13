@@ -110,8 +110,13 @@ func writeReportThreatModel(b *strings.Builder, scan *db.Scan, tm map[string]any
 		fmt.Fprintf(b, "No completed %s scan yet.\n\n", deepDiveSkillName)
 		return
 	}
-	fmt.Fprintf(b, "From scan #%d at commit `%s` (%s).\n\n",
-		scan.ID, shortCommit(scan.Commit), formatScanDate(scan))
+	if scan.SkillsRepoSHA != "" {
+		fmt.Fprintf(b, "From scan #%d at commit `%s` (%s) — skills repo `%s`.\n\n",
+			scan.ID, shortCommit(scan.Commit), formatScanDate(scan), shortCommit(scan.SkillsRepoSHA))
+	} else {
+		fmt.Fprintf(b, "From scan #%d at commit `%s` (%s).\n\n",
+			scan.ID, shortCommit(scan.Commit), formatScanDate(scan))
+	}
 
 	if tm == nil {
 		fmt.Fprintf(b, "Scan report was not machine-readable.\n\n")
