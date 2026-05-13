@@ -38,6 +38,13 @@ type Server struct {
 	Worker *worker.Worker
 	tmpl   *template.Template
 
+	// SkillsRepoSHA pins the commit of -skills-repo loaded at startup. Set
+	// once by main after loadSkills resolves it; stamped onto every Scan
+	// row enqueueSkillWith creates so two runs a week apart can be told
+	// apart even if the upstream branch has moved. Empty when -skills-repo
+	// is not configured.
+	SkillsRepoSHA string
+
 	// resolvePURL maps a Package URL to its source repository URL via
 	// packages.ecosyste.ms. Field rather than direct call so tests can
 	// stub the network lookup.
@@ -1378,6 +1385,7 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 		DependentID:    opts.DependentID,
 		SubPath:        opts.SubPath,
 		Ref:            opts.Ref,
+		SkillsRepoSHA:  s.SkillsRepoSHA,
 		APIToken:       NewAPIToken(),
 	}
 	if err := s.DB.Create(&scan).Error; err != nil {

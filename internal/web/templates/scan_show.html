@@ -53,6 +53,12 @@
     <dd>{{if .SkillID}}<a href="/skills/{{.SkillID}}">{{.SkillName}}</a>{{else}}{{.SkillName}}{{end}}</dd>
   </div>
   {{end}}
+  {{if .SkillsRepoSHA}}
+  <div>
+    <dt class="text-muted-foreground">Skills repo</dt>
+    <dd><code>{{short .SkillsRepoSHA}}</code></dd>
+  </div>
+  {{end}}
 </dl>
 
 {{if gt .TotalInputTokens 0}}

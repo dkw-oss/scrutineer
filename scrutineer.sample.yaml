@@ -24,8 +24,12 @@
 # skills:
 #   - ./skills
 
-# Clone a skills repo on startup and load it.
+# Clone a skills repo on startup and load it. Accepts either an https URL or
+# an "owner/repo" shorthand expanded to https://github.com/owner/repo. An
+# optional "@ref" pins a branch, tag or commit; the resolved SHA is recorded
+# on every scan so two runs a week apart can be told apart.
 # skills_repo: https://github.com/alpha-omega-security/scrutineer-skills
+# skills_repo: alpha-omega-security/scrutineer-skills@v0.3.1
 
 # Disable the docker runner even if docker is available on the host.
 # no_docker: false

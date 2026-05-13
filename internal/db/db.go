@@ -122,6 +122,13 @@ type Scan struct {
 	// Empty means the repository's default branch (origin/HEAD).
 	Ref string
 
+	// SkillsRepoSHA pins which commit of the -skills-repo produced this
+	// scan. Resolved once at startup and stamped on every Scan row so two
+	// runs a week apart can be told apart even if the upstream branch has
+	// moved. Empty when -skills-repo is unset or when the scan kind does
+	// not run a remote skill (e.g. "import").
+	SkillsRepoSHA string
+
 	// SubPath scopes the scan's code analysis to a sub-folder within the
 	// clone (e.g. airflow-core inside apache/airflow). Empty means the
 	// repo root. Skills that walk files honour this through

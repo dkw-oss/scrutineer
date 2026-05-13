@@ -192,7 +192,7 @@ When the docker runner is active, scrutineer starts an authenticated egress prox
 | `-data` | `./data` | Data directory for the database and workspaces |
 | `-effort` | `high` | Claude effort level |
 | `-skills` | - | Local directory to load SKILL.md files from (repeatable) |
-| `-skills-repo` | - | Git HTTPS URL to clone skills from on startup |
+| `-skills-repo` | - | `owner/repo[@ref]` or git HTTPS URL `https://host/path[@ref]` to clone skills from on startup; `@ref` pins a branch, tag or commit and the resolved SHA is recorded on every scan |
 | `--no-docker` | false | Disable containerised runner |
 | `--runner-image` | `ghcr.io/alpha-omega-security/scrutineer-runner:latest` | Docker image for per-scan containers |
 | `-concurrency` | `4` | Number of scans to run in parallel |

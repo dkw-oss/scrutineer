@@ -79,7 +79,7 @@ func parseFlags() *flags {
 	flag.StringVar(&f.effort, "effort", "high", "claude effort")
 	flag.BoolVar(&f.noDocker, "no-docker", false, "disable containerised runner even if docker is available")
 	flag.StringVar(&f.runnerImage, "runner-image", worker.DefaultRunnerImage, "docker image for per-job containers")
-	flag.StringVar(&f.skillsRepo, "skills-repo", "", "clone skills from this git https URL on startup")
+	flag.StringVar(&f.skillsRepo, "skills-repo", "", "clone skills on startup; owner/repo[@ref] or https://host/path[@ref]")
 	flag.IntVar(&f.concurrency, "concurrency", queue.DefaultWorkerConcurrency, "number of scans to run in parallel")
 	flag.StringVar(&f.cloneMode, "clone", "shallow", "clone depth: shallow (--depth 1) or full")
 	flag.DurationVar(&f.scanTimeout, "scan-timeout", worker.DefaultScanTimeout, "wall-clock limit per scan")
@@ -231,7 +231,8 @@ func run(log *slog.Logger) error {
 	}
 
 	skills.ModelValidator = web.ValidModel
-	if err := loadSkills(log, gdb, f.dataDir, f.skillLocal, f.skillsRepo, f.fullClone()); err != nil {
+	skillsRepoSHA, err := loadSkills(log, gdb, f.dataDir, f.skillLocal, f.skillsRepo, f.fullClone())
+	if err != nil {
 		return err
 	}
 
@@ -303,6 +304,7 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	srv.SkillsRepoSHA = skillsRepoSHA
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -324,28 +326,38 @@ func run(log *slog.Logger) error {
 	return nil
 }
 
-func loadSkills(log *slog.Logger, gdb *gorm.DB, dataDir string, dirs skillDirs, repo string, fullClone bool) error {
+// loadSkills loads local skill directories and, if a remote skills repo is
+// configured, clones/pulls it at the requested ref and loads it too. Returns
+// the resolved commit SHA of the remote repo (empty when no repo is set) so
+// the caller can stamp it on each Scan for reproducibility.
+func loadSkills(log *slog.Logger, gdb *gorm.DB, dataDir string, dirs skillDirs, repoSpec string, fullClone bool) (string, error) {
 	for _, d := range dirs {
 		n, err := skills.LoadDirectory(gdb, log, d, "local")
 		if err != nil {
-			return fmt.Errorf("load skills from %s: %w", d, err)
+			return "", fmt.Errorf("load skills from %s: %w", d, err)
 		}
 		log.Info("loaded skills", "source", d, "count", n)
 	}
-	if repo != "" {
-		dst := filepath.Join(dataDir, "skills-cache", hashPath(repo))
-		ctx, cancel := context.WithTimeout(context.Background(), skillsCloneTimeout)
-		defer cancel()
-		if err := skills.CloneOrPull(ctx, repo, dst, fullClone); err != nil {
-			return fmt.Errorf("clone skills repo: %w", err)
-		}
-		n, err := skills.LoadDirectory(gdb, log, dst, "remote")
-		if err != nil {
-			return fmt.Errorf("load skills from %s: %w", repo, err)
-		}
-		log.Info("loaded skills", "source", repo, "count", n)
+	if repoSpec == "" {
+		return "", nil
 	}
-	return nil
+	url, ref, err := skills.ParseRepoSpec(repoSpec)
+	if err != nil {
+		return "", fmt.Errorf("parse skills_repo %q: %w", repoSpec, err)
+	}
+	dst := filepath.Join(dataDir, "skills-cache", hashPath(repoSpec))
+	ctx, cancel := context.WithTimeout(context.Background(), skillsCloneTimeout)
+	defer cancel()
+	sha, err := skills.CloneOrPull(ctx, url, ref, dst, fullClone)
+	if err != nil {
+		return "", fmt.Errorf("clone skills repo: %w", err)
+	}
+	n, err := skills.LoadDirectory(gdb, log, dst, "remote")
+	if err != nil {
+		return "", fmt.Errorf("load skills from %s: %w", url, err)
+	}
+	log.Info("loaded skills", "source", url, "ref", ref, "sha", sha, "count", n)
+	return sha, nil
 }
 
 func addrPort(addr string) string {

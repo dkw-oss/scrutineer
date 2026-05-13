@@ -155,6 +155,52 @@ func TestRepoReport_includesEverySection(t *testing.T) {
 	}
 }
 
+func TestRepoReport_includesSkillsRepoSHA(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	repo := db.Repository{URL: "https://example.com/x", Name: "x"}
+	s.DB.Create(&repo)
+	now := time.Now()
+	s.DB.Create(&db.Scan{
+		RepositoryID: repo.ID, Kind: worker.JobSkill, Status: db.ScanDone,
+		SkillName: "security-deep-dive", Commit: "abcdef1234567",
+		SkillsRepoSHA: "feedface0123456789abcdef0123456789abcdef",
+		Report:        `{"version":1}`, FinishedAt: &now, CreatedAt: now,
+	})
+
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, localReq("GET",
+		"/repositories/"+strconv.FormatUint(uint64(repo.ID), 10)+"/report.md"))
+	if w.Code != 200 {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "skills repo `feedface0123`") {
+		t.Errorf("report missing skills repo sha line:\n%s", body)
+	}
+}
+
+func TestRepoReport_omitsSkillsRepoSHAWhenUnset(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	repo := db.Repository{URL: "https://example.com/x", Name: "x"}
+	s.DB.Create(&repo)
+	now := time.Now()
+	s.DB.Create(&db.Scan{
+		RepositoryID: repo.ID, Kind: worker.JobSkill, Status: db.ScanDone,
+		SkillName: "security-deep-dive", Commit: "abcdef1234567",
+		Report: `{"version":1}`, FinishedAt: &now, CreatedAt: now,
+	})
+
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, localReq("GET",
+		"/repositories/"+strconv.FormatUint(uint64(repo.ID), 10)+"/report.md"))
+	body := w.Body.String()
+	if strings.Contains(body, "skills repo") {
+		t.Errorf("expected no skills-repo mention, got:\n%s", body)
+	}
+}
+
 func TestRepoReport_emptyRepoStillRenders(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()
