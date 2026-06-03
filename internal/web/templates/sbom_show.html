@@ -205,7 +205,7 @@
           <td class="truncate"><a href="/repositories/{{$repo.ID}}" class="hover:underline">{{$repo.Name}}</a></td>
           <td class="text-muted-foreground">{{if .PublishedAt}}{{.PublishedAt.Format "2006-01-02"}}{{end}}</td>
           <td>{{if .URL}}<a href="{{.URL}}" target="_blank" rel="noopener" class="btn-sm-ghost"
-              data-tooltip="View advisory"><i data-lucide="external-link"></i></a>{{end}}</td>
+              aria-label="View advisory" data-tooltip="View advisory"><i data-lucide="external-link"></i></a>{{end}}</td>
         </tr>
       {{end}}
       </tbody>

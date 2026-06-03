@@ -36,7 +36,7 @@
             <span class="truncate text-xs text-muted-foreground">local</span>
           </span>
         </a>
-        <a href="/settings" class="btn-ghost p-2 size-10 flex items-center justify-center rounded-lg text-muted-foreground hover:text-foreground" data-tooltip="Settings" data-side="bottom">
+        <a href="/settings" class="btn-ghost p-2 size-10 flex items-center justify-center rounded-lg text-muted-foreground hover:text-foreground" aria-label="Settings" data-tooltip="Settings" data-side="bottom">
           <i data-lucide="settings" class="size-4"></i>
         </a>
       </div>
@@ -166,17 +166,17 @@
   {{if or (eq (status .Status) "queued") (eq (status .Status) "running")}}
     <form method="post" action="/scans/{{.ID}}/cancel" hx-post="/scans/{{.ID}}/cancel"
           hx-swap="none">
-      <button type="submit" class="btn-sm-ghost" data-tooltip="Cancel"><i data-lucide="x"></i></button>
+      <button type="submit" class="btn-sm-ghost" aria-label="Cancel scan" data-tooltip="Cancel"><i data-lucide="x"></i></button>
     </form>
   {{else if eq (status .Status) "paused"}}
     <form method="post" action="/scans/{{.ID}}/resume" hx-post="/scans/{{.ID}}/resume"
           hx-swap="none">
-      <button type="submit" class="btn-sm-ghost" data-tooltip="Resume"><i data-lucide="play"></i></button>
+      <button type="submit" class="btn-sm-ghost" aria-label="Resume scan" data-tooltip="Resume"><i data-lucide="play"></i></button>
     </form>
   {{else if and (or (eq (status .Status) "failed") (eq (status .Status) "cancelled")) .SkillID}}
     <form method="post" action="/scans/{{.ID}}/retry" hx-post="/scans/{{.ID}}/retry"
           hx-swap="none">
-      <button type="submit" class="btn-sm-ghost" data-tooltip="Retry"><i data-lucide="refresh-cw"></i></button>
+      <button type="submit" class="btn-sm-ghost" aria-label="Retry scan" data-tooltip="Retry"><i data-lucide="refresh-cw"></i></button>
     </form>
   {{end}}
 {{end}}

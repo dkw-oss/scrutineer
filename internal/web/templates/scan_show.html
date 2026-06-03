@@ -109,7 +109,7 @@
 {{$live := and (not .Status.Terminal) (ne (status .Status) "paused")}}
 {{$default := 1}}{{if $live}}{{$default = 2}}{{end}}
 <div class="tabs w-full" id="scan-tabs">
-  <nav role="tablist" aria-orientation="horizontal">
+  <nav role="tablist" aria-orientation="horizontal" aria-label="Scan output">
     <button type="button" role="tab" id="t1" aria-controls="p1"
             aria-selected="{{if eq $default 1}}true{{else}}false{{end}}">Result</button>
     <button type="button" role="tab" id="t2" aria-controls="p2"
@@ -143,10 +143,10 @@
       </table>
       <details>
         <summary class="cursor-pointer text-sm text-muted-foreground">raw report.json</summary>
-        <pre class="log mt-2">{{prettyjson .Report}}</pre>
+        <pre class="log mt-2" tabindex="0" role="region" aria-label="Raw report JSON">{{prettyjson .Report}}</pre>
       </details>
     {{else if .Report}}
-      <pre class="log">{{prettyjson .Report}}</pre>
+      <pre class="log" tabindex="0" role="region" aria-label="Report">{{prettyjson .Report}}</pre>
     {{else}}
       <p class="text-muted-foreground text-sm p-4">No result yet.</p>
     {{end}}
@@ -157,16 +157,16 @@
       <div hx-ext="sse" sse-connect="/events?scan={{.ID}}"
            sse-swap="scan-status" hx-swap="none" hx-disinherit="*"
            data-reload-on-sse="scan-status">
-        <pre class="log" sse-swap="scan-log" hx-swap="beforeend scroll:bottom">{{template "scan_log.html" .}}</pre>
+        <pre class="log" tabindex="0" role="region" aria-label="Scan log" sse-swap="scan-log" hx-swap="beforeend scroll:bottom">{{template "scan_log.html" .}}</pre>
       </div>
     {{else}}
-      <pre class="log">{{template "scan_log.html" .}}</pre>
+      <pre class="log" tabindex="0" role="region" aria-label="Scan log">{{template "scan_log.html" .}}</pre>
     {{end}}
   </div>
 
   {{if .Prompt}}
   <div role="tabpanel" id="p3" aria-labelledby="t3" hidden>
-    <pre class="log">{{.Prompt}}</pre>
+    <pre class="log" tabindex="0" role="region" aria-label="Scan prompt">{{.Prompt}}</pre>
   </div>
   {{end}}
 </div>

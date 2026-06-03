@@ -96,14 +96,14 @@
     {{if .Repo.FetchedAt}}
       {{if .Repo.Description}}<p class="mb-4 max-w-3xl">{{.Repo.Description}}</p>{{end}}
       <div class="flex flex-wrap gap-2 mb-6">
-        {{if .Repo.Languages}}<span class="badge-outline"><i data-lucide="code"></i>{{.Repo.Languages}}</span>{{end}}
-        {{if .Repo.DefaultBranch}}<span class="badge-outline"><i data-lucide="git-branch"></i>{{.Repo.DefaultBranch}}</span>{{end}}
-        {{if .Repo.Stars}}<span class="badge-outline"><i data-lucide="star"></i>{{bignum .Repo.Stars}}</span>{{end}}
-        {{if .Repo.License}}<span class="badge-outline"><i data-lucide="scale"></i>{{.Repo.License}}</span>{{end}}
+        {{if .Repo.Languages}}<span class="badge-outline"><i data-lucide="code"></i><span class="sr-only">Languages: </span>{{.Repo.Languages}}</span>{{end}}
+        {{if .Repo.DefaultBranch}}<span class="badge-outline"><i data-lucide="git-branch"></i><span class="sr-only">Default branch: </span>{{.Repo.DefaultBranch}}</span>{{end}}
+        {{if .Repo.Stars}}<span class="badge-outline"><i data-lucide="star"></i><span class="sr-only">Stars: </span>{{bignum .Repo.Stars}}</span>{{end}}
+        {{if .Repo.License}}<span class="badge-outline"><i data-lucide="scale"></i><span class="sr-only">License: </span>{{.Repo.License}}</span>{{end}}
         {{if .Repo.PushedAt}}<span class="badge-outline"><i data-lucide="clock"></i>pushed {{since .Repo.PushedAt}}</span>{{end}}
-        {{if gt .TotalCost 0.0}}<span class="badge-outline" data-tooltip="Total scan spend on this repository"><i data-lucide="coins"></i>{{usd .TotalCost}}</span>{{end}}
+        {{if gt .TotalCost 0.0}}<span class="badge-outline" data-tooltip="Total scan spend on this repository"><i data-lucide="coins"></i><span class="sr-only">Total scan spend: </span>{{usd .TotalCost}}</span>{{end}}
         {{if .Repo.Archived}}<span class="badge-destructive"><i data-lucide="archive"></i>archived</span>{{end}}
-        {{if .Repo.CloneError}}<span class="badge-destructive" data-tooltip="{{.Repo.CloneError}}"><i data-lucide="wifi-off"></i>unreachable</span>{{end}}
+        {{if .Repo.CloneError}}<span class="badge-destructive" data-tooltip="{{.Repo.CloneError}}"><i data-lucide="wifi-off"></i>unreachable<span class="sr-only">: {{.Repo.CloneError}}</span></span>{{end}}
       </div>
     {{else}}
       <p class="text-muted-foreground text-sm mb-6">Metadata not fetched yet.</p>
@@ -333,7 +333,7 @@
             <td class="text-muted-foreground whitespace-normal break-all">{{if .Requirement}}{{.Requirement}}{{else}}-{{end}}</td>
             <td class="text-muted-foreground">{{.DependencyType}}</td>
             <td class="whitespace-normal text-muted-foreground text-xs">{{range $i, $m := .Manifests}}{{if $i}}, {{end}}{{$m}}{{end}}</td>
-            <td>{{if .PURL}}{{$rid := lookup $.KnownPURLs .PURL}}{{if $rid}}<a href="/repositories/{{$rid}}" class="btn-sm-ghost" data-tooltip="View repository"><i data-lucide="external-link"></i></a>{{else}}<form method="post" action="/dependencies/{{.ID}}/scan" hx-post="/dependencies/{{.ID}}/scan" hx-swap="none"><button type="submit" class="btn-sm-ghost" data-tooltip="Import repository"><i data-lucide="import"></i></button></form>{{end}}{{end}}</td>
+            <td>{{if .PURL}}{{$rid := lookup $.KnownPURLs .PURL}}{{if $rid}}<a href="/repositories/{{$rid}}" class="btn-sm-ghost" aria-label="View repository" data-tooltip="View repository"><i data-lucide="external-link"></i></a>{{else}}<form method="post" action="/dependencies/{{.ID}}/scan" hx-post="/dependencies/{{.ID}}/scan" hx-swap="none"><button type="submit" class="btn-sm-ghost" aria-label="Import repository" data-tooltip="Import repository"><i data-lucide="import"></i></button></form>{{end}}{{end}}</td>
           </tr>
         {{end}}
         </tbody>
@@ -367,7 +367,7 @@
           <td class="whitespace-normal text-muted-foreground text-xs">{{.Packages}}</td>
           <td class="text-muted-foreground">{{if .PublishedAt}}{{since .PublishedAt}}{{end}}</td>
           <td>{{if .URL}}<a href="{{.URL}}" target="_blank" rel="noopener" class="btn-sm-ghost"
-              data-tooltip="View advisory"><i data-lucide="external-link"></i></a>{{end}}</td>
+              aria-label="View advisory" data-tooltip="View advisory"><i data-lucide="external-link"></i></a>{{end}}</td>
         </tr>
       {{end}}
       </tbody>
@@ -390,7 +390,7 @@
           <td class="text-muted-foreground">{{.LatestVersion}}</td>
           <td class="text-muted-foreground">{{bignum .Downloads}}</td>
           <td class="text-muted-foreground">{{bignum .DependentRepos}} repos</td>
-          <td>{{if .RepositoryURL}}{{$rid := lookup $.KnownURLs .RepositoryURL}}{{if $rid}}<a href="/repositories/{{$rid}}" class="btn-sm-ghost" data-tooltip="View repository"><i data-lucide="external-link"></i></a>{{else}}<form method="post" action="/dependents/{{.ID}}/scan" hx-post="/dependents/{{.ID}}/scan" hx-swap="none"><button type="submit" class="btn-sm-ghost" data-tooltip="Import repository"><i data-lucide="import"></i></button></form>{{end}}{{end}}</td>
+          <td>{{if .RepositoryURL}}{{$rid := lookup $.KnownURLs .RepositoryURL}}{{if $rid}}<a href="/repositories/{{$rid}}" class="btn-sm-ghost" aria-label="View repository" data-tooltip="View repository"><i data-lucide="external-link"></i></a>{{else}}<form method="post" action="/dependents/{{.ID}}/scan" hx-post="/dependents/{{.ID}}/scan" hx-swap="none"><button type="submit" class="btn-sm-ghost" aria-label="Import repository" data-tooltip="Import repository"><i data-lucide="import"></i></button></form>{{end}}{{end}}</td>
         </tr>
       {{end}}
       </tbody>
