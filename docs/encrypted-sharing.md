@@ -66,7 +66,18 @@ SSH keys are the default. Age-native X25519 keys also work if you prefer them.
 
 Both types can be mixed in a single recipients file. The format is auto-detected per line.
 
-Encrypted (passphrase-protected) SSH keys are not supported in the identity file since scrutineer runs as a server with no stdin. If your SSH key has a passphrase, either use an unprotected copy (`ssh-keygen -p` to remove it) or generate a dedicated age-native key with `age-keygen`.
+Passphrase-protected SSH keys are supported. When scrutineer detects an encrypted key at startup, it prompts on stderr and reads the passphrase from stdin (echo disabled). The passphrase is validated immediately — a wrong passphrase fails startup, not the first import. If stdin is not a terminal (e.g. systemd, Docker), the startup fails with a clear message; use an unencrypted key or an age-native key in headless deployments.
+
+### Unsupported: FIDO2 / ed25519-sk keys
+
+`sk-ssh-ed25519@openssh.com` keys (YubiKey FIDO2, Windows Hello) **cannot** be used with age encryption. Age decrypts via X25519 key agreement, which requires the raw private key; FIDO2 devices only expose signing and never export key material. This is a fundamental protocol mismatch — the age CLI has the same limitation.
+
+**YubiKey users who want hardware-backed decryption** can use `age-plugin-yubikey`, which talks to the YubiKey's PIV applet (a separate applet from FIDO2 on the same device). This produces `age1yubikey1...` recipients and requires physical touch per decrypt. See [github.com/str4d/age-plugin-yubikey](https://github.com/str4d/age-plugin-yubikey). Note that PIV-based decrypt requires someone physically present at the server for each encrypted import, so it is impractical for headless deployments.
+
+For headless servers, a dedicated unpassworded ed25519 key with restrictive file permissions is the standard approach:
+
+    ssh-keygen -t ed25519 -N "" -f ~/.ssh/scrutineer
+    chmod 600 ~/.ssh/scrutineer
 
 ## Managing a team keyring
 
