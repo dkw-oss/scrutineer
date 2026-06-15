@@ -118,7 +118,8 @@
 # encrypted export.
 # recipients_file: ./recipients.txt
 
-# Path to an age identity file (AGE-SECRET-KEY-1...) or an SSH private key
-# used to decrypt encrypted imports. Mode 0600 recommended. Empty disables
-# encrypted import.
-# identity_file: ~/.age/scrutineer.key
+# Path to an SSH private key or age identity file (AGE-SECRET-KEY-1...)
+# used to decrypt encrypted imports. Passphrase-protected SSH keys are
+# supported (prompted on stdin at startup). Mode 0600 recommended. Empty
+# disables encrypted import.
+# identity_file: ~/.ssh/id_ed25519
