@@ -219,7 +219,7 @@
     <div class="flex items-center justify-between mb-4 gap-2">
       <p class="text-sm text-muted-foreground">
         Open findings from the security-deep-dive audit.
-        Rejected and duplicate findings are hidden.{{if .ScannerFindings}} See the
+        Fixed, published, rejected, and duplicate findings are hidden.{{if .ScannerFindings}} See the
         Scanners tab for zizmor/semgrep output.{{end}}
       </p>
       <div class="flex items-center gap-2 shrink-0">
@@ -279,6 +279,7 @@
         </div>
       {{end}}
     </div>
+    {{- template "row-cap" (dict "Shown" .Findings "Total" .FindingsTotal "Href" (printf "/findings?owner=%s&category=%s" .Repo.Owner .Category))}}
   </div>
   {{end}}
 
@@ -312,6 +313,7 @@
         </div>
       {{end}}
     </div>
+    {{- template "row-cap" (dict "Shown" .ScannerFindings "Total" .ScannerFindingsTotal "Href" (printf "/findings?owner=%s&scanners=1" .Repo.Owner))}}
   </div>
   {{end}}
 
@@ -364,7 +366,7 @@
           <tr>
             <td class="whitespace-normal font-medium"><code class="text-sm break-all">{{.Name}}</code></td>
             <td><span class="badge-outline">{{.Ecosystem}}</span></td>
-            <td class="text-muted-foreground whitespace-normal break-all">{{if .Requirement}}{{.Requirement}}{{else}}-{{end}}</td>
+            <td class="text-muted-foreground whitespace-normal break-all">{{if .Requirement}}{{.Requirement}}{{else}}-{{end}}{{if .RequirementUnresolved}} <span class="badge-outline" data-tooltip="{{if .RequirementResolution}}{{.RequirementResolution}}{{else}}Requirement contains an unresolved manifest expression{{end}}">unresolved</span>{{end}}</td>
             <td class="text-muted-foreground">{{.DependencyType}}</td>
             <td class="whitespace-normal text-muted-foreground text-xs">{{range $i, $m := .Manifests}}{{if $i}}, {{end}}{{$u := locurl $.Repo.ID $.DepsCommit $m}}{{if $u}}<a href="{{$u}}" class="hover:underline break-all">{{$m}}</a>{{else}}{{$m}}{{end}}{{end}}</td>
             <td>{{if .PURL}}{{$rid := lookup $.KnownPURLs .PURL}}{{if $rid}}<a href="/repositories/{{$rid}}" class="btn-sm-ghost" aria-label="View repository" data-tooltip="View repository"><i data-lucide="external-link"></i></a>{{else}}<form method="post" action="/dependencies/{{.ID}}/scan" hx-post="/dependencies/{{.ID}}/scan" hx-swap="none"><button type="submit" class="btn-sm-ghost" aria-label="Import repository" data-tooltip="Import repository"><i data-lucide="import"></i></button></form>{{end}}{{end}}</td>
@@ -372,6 +374,11 @@
         {{end}}
         </tbody>
       </table>
+      {{if gt .DepsTotal .TabRowCap}}
+      <p class="text-sm text-muted-foreground mt-3">
+        Dependency list capped at the first {{.TabRowCap}} of {{.DepsTotal}} rows.
+      </p>
+      {{end}}
     {{else if .HiddenDeps}}
       <p class="text-muted-foreground text-sm p-4">No runtime dependencies in the default view.</p>
     {{else}}
@@ -408,6 +415,7 @@
       {{end}}
       </tbody>
     </table>
+    {{- template "row-cap" (dict "Shown" .Advisories "Total" .AdvisoriesTotal)}}
   </div>
   {{end}}
 
@@ -431,6 +439,7 @@
       {{end}}
       </tbody>
     </table>
+    {{- template "row-cap" (dict "Shown" .Dependents "Total" .DependentsTotal)}}
   </div>
   {{end}}
 
@@ -467,8 +476,18 @@
   </div>
 
   <div role="tabpanel" id="rp3" aria-labelledby="rt3" hidden>
-    {{if gt .FailedScans 0}}
-      <div class="flex justify-end mb-2">
+    {{if or (gt .ActiveScans 0) (gt .FailedScans 0)}}
+      <div class="flex justify-end gap-2 mb-2">
+        {{if gt .ActiveScans 0}}
+        <form method="post" action="/scans/cancel-all?repository={{.Repo.ID}}"
+              hx-post="/scans/cancel-all?repository={{.Repo.ID}}" hx-swap="none"
+              hx-confirm="Cancel all {{.ActiveScans}} running or queued scan(s) on {{.Repo.Name}}? Any work in progress is discarded.">
+          <button type="submit" class="btn-outline">
+            <i data-lucide="x"></i> Cancel all ({{.ActiveScans}})
+          </button>
+        </form>
+        {{end}}
+        {{if gt .FailedScans 0}}
         <form method="post" action="/scans/retry-failed?repository={{.Repo.ID}}"
               hx-post="/scans/retry-failed?repository={{.Repo.ID}}" hx-swap="none"
               hx-confirm="Re-enqueue every failed scan on this repository?">
@@ -476,6 +495,7 @@
             <i data-lucide="refresh-cw"></i> Retry failed ({{.FailedScans}})
           </button>
         </form>
+        {{end}}
       </div>
     {{end}}
     <table class="table">

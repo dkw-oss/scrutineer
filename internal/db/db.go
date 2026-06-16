@@ -296,6 +296,19 @@ var FindingLifecycles = []FindingLifecycle{
 	FindingAcknowledged, FindingFixed, FindingPublished, FindingRejected, FindingDuplicate,
 }
 
+// ClosedFindingLifecycles are terminal or hidden-by-default findings.
+var ClosedFindingLifecycles = []FindingLifecycle{
+	FindingFixed, FindingPublished, FindingRejected, FindingDuplicate,
+}
+
+func ClosedFindingLifecycleSQLValues() string {
+	values := make([]string, 0, len(ClosedFindingLifecycles))
+	for _, status := range ClosedFindingLifecycles {
+		values = append(values, "'"+strings.ReplaceAll(string(status), "'", "''")+"'")
+	}
+	return strings.Join(values, ", ")
+}
+
 // Advisory is a known security advisory from advisories.ecosyste.ms.
 type Advisory struct {
 	ID           uint `gorm:"primarykey"`
@@ -336,16 +349,21 @@ type Dependent struct {
 // Dependency is one package dependency discovered by the git-pkgs job.
 // Rows are replaced wholesale each time the job runs for a repository.
 type Dependency struct {
-	ID             uint `gorm:"primarykey"`
-	RepositoryID   uint `gorm:"index;not null"`
-	Name           string
-	Ecosystem      string `gorm:"index"`
-	PURL           string
-	Requirement    string
-	DependencyType string
-	ManifestPath   string
-	ManifestKind   string
-	CreatedAt      time.Time
+	ID           uint `gorm:"primarykey"`
+	RepositoryID uint `gorm:"index;not null"`
+	Name         string
+	Ecosystem    string `gorm:"index"`
+	PURL         string
+	Requirement  string
+	// RequirementUnresolved is true when Requirement still contains a
+	// manifest-level expression such as ${project.version}. Advisory matching
+	// should treat it as informational, not a concrete version/range.
+	RequirementUnresolved bool
+	RequirementResolution string
+	DependencyType        string
+	ManifestPath          string
+	ManifestKind          string
+	CreatedAt             time.Time
 }
 
 // FindingResolution says how a finding got resolved. Set by the analyst
@@ -455,6 +473,10 @@ type Finding struct {
 	// Disclosure / triage fields. Any of these may be set by a tool, a
 	// model-backed skill, or the analyst; see FindingHistory for the trail.
 	CVEID string
+	// GHSAID is the GitHub Security Advisory identifier (GHSA-xxxx-xxxx-xxxx),
+	// populated once the advisory has been published on GitHub. It sits
+	// alongside CVEID; a finding may carry both.
+	GHSAID string `gorm:"column:ghsa_id"`
 	// CVSSVector is the canonical CVSS v3.x base vector (3.0 or 3.1).
 	// CVSSv4Vector is the v4.0 base vector. Both may be populated when
 	// the analyst (or the disclose skill) carries both forward, which

@@ -28,9 +28,12 @@ func (s *Server) registerSBOMRoutes(mux *http.ServeMux) {
 }
 
 func (s *Server) sbomList(w http.ResponseWriter, r *http.Request) {
+	var total int64
+	s.DB.Model(&db.SBOMUpload{}).Count(&total)
+	page := paginate(r, total)
 	var rows []db.SBOMUpload
-	s.DB.Order("id desc").Find(&rows)
-	s.render(w, r, "sboms.html", map[string]any{"SBOMs": rows})
+	s.DB.Order("id desc").Limit(perPage).Offset((page.N - 1) * perPage).Find(&rows)
+	s.render(w, r, "sboms.html", map[string]any{"SBOMs": rows, "Page": page})
 }
 
 func (s *Server) sbomNew(w http.ResponseWriter, r *http.Request) {
@@ -131,13 +134,14 @@ func (s *Server) sbomShow(w http.ResponseWriter, r *http.Request) {
 
 	sort := r.URL.Query().Get("sort")
 	var findings []db.Finding
+	var findingsTotal int64
 	var advisories []db.Advisory
+	var advisoriesTotal int64
 	if len(repoIDs) > 0 {
 		// Deep-dive findings only — the SBOM "Findings" tab is a
 		// downstream-impact view, where lint output from per-repo scanners
 		// (zizmor, semgrep) would be misleading at this level.
-		q := s.DB.Where("repository_id IN ? AND status NOT IN ?", repoIDs,
-			[]db.FindingLifecycle{db.FindingRejected, db.FindingDuplicate}).
+		q := s.DB.Where("repository_id IN ? AND status NOT IN ?", repoIDs, db.ClosedFindingLifecycles).
 			Where("scan_id IN (?)", deepDiveScanIDs(s.DB))
 		if sev := r.URL.Query().Get("severity"); sev != "" {
 			q = q.Where("severity = ?", sev)
@@ -155,10 +159,12 @@ func (s *Server) sbomShow(w http.ResponseWriter, r *http.Request) {
 			sort = defaultSort
 			q = q.Order("id desc")
 		}
-		q.Find(&findings)
+		q.Model(&db.Finding{}).Count(&findingsTotal)
+		q.Limit(tabRowCap).Find(&findings)
 
-		s.DB.Where("repository_id IN ? AND withdrawn_at IS NULL", repoIDs).
-			Order("cvss_score desc, published_at desc").Find(&advisories)
+		advQ := s.DB.Where("repository_id IN ? AND withdrawn_at IS NULL", repoIDs)
+		advQ.Model(&db.Advisory{}).Count(&advisoriesTotal)
+		advQ.Order("cvss_score desc, published_at desc").Limit(tabRowCap).Find(&advisories)
 	}
 
 	resolved, withRepo := 0, 0
@@ -173,7 +179,9 @@ func (s *Server) sbomShow(w http.ResponseWriter, r *http.Request) {
 
 	s.render(w, r, "sbom_show.html", map[string]any{
 		"SBOM": up, "Packages": pkgs,
-		"Findings": findings, "Advisories": advisories, "Repos": reposByID,
+		"Findings": findings, "FindingsTotal": findingsTotal,
+		"Advisories": advisories, "AdvisoriesTotal": advisoriesTotal,
+		"Repos":    reposByID,
 		"Resolved": resolved, "WithRepo": withRepo,
 		"Severity": r.URL.Query().Get("severity"), "Sort": sort,
 		"Category":   r.URL.Query().Get("category"),

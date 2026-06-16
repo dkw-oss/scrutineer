@@ -804,16 +804,45 @@ func TestFindings_statusFilter(t *testing.T) {
 		Severity: "High", Status: db.FindingTriaged})
 	s.DB.Create(&db.Finding{ScanID: scan.ID, RepositoryID: repo.ID, Title: "fixed finding",
 		Severity: "High", Status: db.FindingFixed})
+	s.DB.Create(&db.Finding{ScanID: scan.ID, RepositoryID: repo.ID, Title: "published finding",
+		Severity: "High", Status: db.FindingPublished})
+	s.DB.Create(&db.Finding{ScanID: scan.ID, RepositoryID: repo.ID, Title: "rejected finding",
+		Severity: "High", Status: db.FindingRejected})
+	s.DB.Create(&db.Finding{ScanID: scan.ID, RepositoryID: repo.ID, Title: "duplicate finding",
+		Severity: "High", Status: db.FindingDuplicate})
+
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, localReq("GET", "/findings"))
+	if w.Code != 200 {
+		t.Fatalf("default status code %d", w.Code)
+	}
+	body := w.Body.String()
+	for _, title := range []string{"fresh finding", "triaged finding"} {
+		if !strings.Contains(body, ">"+title+"</a>") {
+			t.Errorf("default listing missing %q", title)
+		}
+	}
+	for _, title := range []string{"fixed finding", "published finding", "rejected finding", "duplicate finding"} {
+		if strings.Contains(body, ">"+title+"</a>") {
+			t.Errorf("default listing should hide closed finding %q", title)
+		}
+	}
+	if !strings.Contains(body, ">Open</a>") || !strings.Contains(body, "status=all") {
+		t.Error("status dropdown should expose Open and status=all options")
+	}
 
 	cases := []struct {
 		status  string
 		want    []string
 		missing []string
 	}{
-		{"new", []string{"fresh finding"}, []string{"triaged finding", "fixed finding"}},
-		{"triaged", []string{"triaged finding"}, []string{"fresh finding", "fixed finding"}},
-		{"fixed", []string{"fixed finding"}, []string{"fresh finding", "triaged finding"}},
-		{"rejected", nil, []string{"fresh finding", "triaged finding", "fixed finding"}},
+		{"all", []string{"fresh finding", "triaged finding", "fixed finding", "published finding", "rejected finding", "duplicate finding"}, nil},
+		{"new", []string{"fresh finding"}, []string{"triaged finding", "fixed finding", "published finding", "rejected finding", "duplicate finding"}},
+		{"triaged", []string{"triaged finding"}, []string{"fresh finding", "fixed finding", "published finding", "rejected finding", "duplicate finding"}},
+		{"fixed", []string{"fixed finding"}, []string{"fresh finding", "triaged finding", "published finding", "rejected finding", "duplicate finding"}},
+		{"published", []string{"published finding"}, []string{"fresh finding", "triaged finding", "fixed finding", "rejected finding", "duplicate finding"}},
+		{"rejected", []string{"rejected finding"}, []string{"fresh finding", "triaged finding", "fixed finding", "published finding", "duplicate finding"}},
+		{"duplicate", []string{"duplicate finding"}, []string{"fresh finding", "triaged finding", "fixed finding", "published finding", "rejected finding"}},
 	}
 	for _, tc := range cases {
 		w := httptest.NewRecorder()
@@ -836,9 +865,9 @@ func TestFindings_statusFilter(t *testing.T) {
 	}
 
 	// The status filter is preserved across the other filter links.
-	w := httptest.NewRecorder()
+	w = httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, localReq("GET", "/findings?status=new"))
-	body := w.Body.String()
+	body = w.Body.String()
 	if !strings.Contains(body, "severity=High&status=new&category=") {
 		t.Error("severity dropdown links should carry status=new")
 	}
@@ -1128,6 +1157,8 @@ func TestFindings_missedFilterAndBadge(t *testing.T) {
 		Severity: "High"})
 	s.DB.Create(&db.Finding{ScanID: scan.ID, RepositoryID: repo.ID, Title: "possibly-fixed finding",
 		Severity: "High", MissedCount: 2, LastMissedScanID: scan.ID})
+	s.DB.Create(&db.Finding{ScanID: scan.ID, RepositoryID: repo.ID, Title: "closed-missed finding",
+		Severity: "High", Status: db.FindingFixed, MissedCount: 1, LastMissedScanID: scan.ID})
 
 	// Unfiltered: both visible, missed one shows the count, toolbar shows total.
 	w := httptest.NewRecorder()
@@ -1140,7 +1171,7 @@ func TestFindings_missedFilterAndBadge(t *testing.T) {
 		t.Error("missed-count marker not rendered on row")
 	}
 	if !strings.Contains(body, "Not seen on rescan (1)") {
-		t.Error("toolbar should show total findings with missed_count > 0")
+		t.Error("toolbar should show total open findings with missed_count > 0")
 	}
 
 	// ?missed=1: only the missed finding.
@@ -1153,9 +1184,23 @@ func TestFindings_missedFilterAndBadge(t *testing.T) {
 	if !strings.Contains(body, "possibly-fixed finding") {
 		t.Error("?missed=1 should show findings with missed_count > 0")
 	}
+	if strings.Contains(body, "closed-missed finding") {
+		t.Error("?missed=1 should still hide closed findings by default")
+	}
 	// Severity/sort links preserve the missed filter.
 	if !strings.Contains(body, "severity=High&status=&category=&sort=newest&missed=1") {
 		t.Error("severity dropdown links should carry missed=1")
+	}
+
+	// Explicit closed-status filters count and list closed missed findings.
+	w = httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, localReq("GET", "/findings?status=fixed&missed=1"))
+	body = w.Body.String()
+	if !strings.Contains(body, "closed-missed finding") || strings.Contains(body, "possibly-fixed finding") {
+		t.Errorf("fixed missed filter should show only fixed missed findings: %s", body)
+	}
+	if !strings.Contains(body, "Not seen on rescan (1)") {
+		t.Error("missed badge should count fixed missed findings under status=fixed")
 	}
 }
 
@@ -1174,6 +1219,10 @@ func TestFindings_scannerToggle(t *testing.T) {
 	s.DB.Create(&db.Finding{ScanID: dd.ID, RepositoryID: repo.ID, Title: "audit-finding", Severity: "High"})
 	s.DB.Create(&db.Finding{ScanID: sg.ID, RepositoryID: repo.ID, Title: "semgrep-finding", Severity: "High"})
 	s.DB.Create(&db.Finding{ScanID: zz.ID, RepositoryID: repo.ID, Title: "zizmor-finding", Severity: "High"})
+	s.DB.Create(&db.Finding{ScanID: dd.ID, RepositoryID: repo.ID, Title: "fixed-audit-finding",
+		Severity: "High", Status: db.FindingFixed})
+	s.DB.Create(&db.Finding{ScanID: sg.ID, RepositoryID: repo.ID, Title: "fixed-semgrep-finding",
+		Severity: "High", Status: db.FindingFixed})
 
 	// Default: scanner findings hidden, audit visible. Toggle advertises the
 	// total scanner count so the operator knows what they're suppressing.
@@ -1198,6 +1247,17 @@ func TestFindings_scannerToggle(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("?scanners=1 should include %q", want)
 		}
+	}
+
+	// Explicit closed-status filters count matching scanner findings too.
+	w = httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, localReq("GET", "/findings?status=fixed"))
+	body = w.Body.String()
+	if !strings.Contains(body, "fixed-audit-finding") || strings.Contains(body, "fixed-semgrep-finding") {
+		t.Errorf("status=fixed should show fixed audit findings and hide scanner rows by default: %s", body)
+	}
+	if !strings.Contains(body, "Include scanners (1)") {
+		t.Error("scanner badge should count fixed scanner findings under status=fixed")
 	}
 }
 
@@ -1229,6 +1289,56 @@ func TestFindingShow_rendersMissedCount(t *testing.T) {
 	}
 	if !strings.Contains(body, fmt.Sprintf("scan #%d", rescan.ID)) {
 		t.Error("expected link to last-missed scan")
+	}
+}
+
+func TestFindingShow_ghsaLinksToRepoAdvisory(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	repo := db.Repository{URL: "https://github.com/savonrb/savon", Name: "savon",
+		HTMLURL: "https://github.com/savonrb/savon"}
+	s.DB.Create(&repo)
+	scan := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: "x"}
+	s.DB.Create(&scan)
+	f := db.Finding{ScanID: scan.ID, RepositoryID: repo.ID, Title: "xxe", Severity: "High",
+		GHSAID: "GHSA-mx5j-mp4f-g8jg"}
+	s.DB.Create(&f)
+
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, localReq("GET", fmt.Sprintf("/findings/%d", f.ID)))
+	body := w.Body.String()
+	if w.Code != 200 {
+		t.Fatalf("status %d: %s", w.Code, body)
+	}
+	want := "https://github.com/savonrb/savon/security/advisories/GHSA-mx5j-mp4f-g8jg"
+	if !strings.Contains(body, want) {
+		t.Errorf("expected repo-nested GHSA advisory link %q on finding page", want)
+	}
+}
+
+func TestFindingShow_ghsaFallsBackToGlobalAdvisory(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	// Local/non-GitHub repos have no HTMLURL; the link falls back to the
+	// global advisories page rather than emitting a broken relative URL.
+	repo := db.Repository{URL: "file:///tmp/r", Name: "r"}
+	s.DB.Create(&repo)
+	scan := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: "x"}
+	s.DB.Create(&scan)
+	f := db.Finding{ScanID: scan.ID, RepositoryID: repo.ID, Title: "xxe", Severity: "High",
+		GHSAID: "GHSA-mx5j-mp4f-g8jg"}
+	s.DB.Create(&f)
+
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, localReq("GET", fmt.Sprintf("/findings/%d", f.ID)))
+	body := w.Body.String()
+	if w.Code != 200 {
+		t.Fatalf("status %d: %s", w.Code, body)
+	}
+	if !strings.Contains(body, "https://github.com/advisories/GHSA-mx5j-mp4f-g8jg") {
+		t.Error("expected global GHSA advisory link when repo has no HTMLURL")
 	}
 }
 
@@ -1715,17 +1825,42 @@ func TestFindingPatchRunEnqueuesPatchSkill(t *testing.T) {
 }
 
 func TestEnqueueSkillWith_modelPrecedence(t *testing.T) {
+	withTestModels(t, []Model{
+		{Name: "Test High", ID: "test-high"},
+		{Name: "Test Mid", ID: "test-mid"},
+		{Name: "Test Max", ID: "test-max"},
+		{Name: "Test Exact", ID: "test-exact"},
+	})
+
 	s, done := newTestServer(t)
 	defer done()
 
+	if err := db.SetSetting(s.DB, db.SettingModelTierMid, "test-mid"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetSetting(s.DB, db.SettingModelTierHigh, "test-high"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetSetting(s.DB, db.SettingModelTierMax, "test-max"); err != nil {
+		t.Fatal(err)
+	}
 	repo := db.Repository{URL: "https://github.com/foo/bar", Name: "bar"}
 	s.DB.Create(&repo)
 	withModel := db.Skill{Name: "lite", Body: "b", OutputFile: "r.json", OutputKind: "freeform",
-		Version: 1, Active: true, Source: "ui", Model: "claude-sonnet-4-6"}
+		Version: 1, Active: true, Source: "ui", Model: "test-exact"}
 	s.DB.Create(&withModel)
+	withTier := db.Skill{Name: "tiered", Body: "b", OutputFile: "r.json", OutputKind: "freeform",
+		Version: 1, Active: true, Source: "ui", Model: ModelTierMid}
+	s.DB.Create(&withTier)
 	noModel := db.Skill{Name: "heavy", Body: "b", OutputFile: "r.json", OutputKind: "freeform",
 		Version: 1, Active: true, Source: "ui"}
 	s.DB.Create(&noModel)
+	metadata := db.Skill{Name: "metadata", Body: "b", OutputFile: "r.json", OutputKind: "freeform",
+		Version: 1, Active: true, Source: "ui", Model: ModelTierMid}
+	s.DB.Create(&metadata)
+	deepDive := db.Skill{Name: deepDiveSkillName, Body: "b", OutputFile: "r.json", OutputKind: "freeform",
+		Version: 1, Active: true, Source: "ui", Model: ModelTierMax}
+	s.DB.Create(&deepDive)
 
 	cases := []struct {
 		name    string
@@ -1733,10 +1868,14 @@ func TestEnqueueSkillWith_modelPrecedence(t *testing.T) {
 		opts    ScanOpts
 		want    string
 	}{
-		{"explicit scan model wins", withModel.ID, ScanOpts{Model: "claude-opus-4-7"}, "claude-opus-4-7"},
-		{"skill model fills empty scan model", withModel.ID, ScanOpts{}, "claude-sonnet-4-6"},
-		{"skill model fills invalid scan model", withModel.ID, ScanOpts{Model: "garbage"}, "claude-sonnet-4-6"},
-		{"server default when nothing set", noModel.ID, ScanOpts{}, DefaultModel()},
+		{"explicit scan model wins", withTier.ID, ScanOpts{Model: "test-max"}, "test-max"},
+		{"explicit scan tier wins", withModel.ID, ScanOpts{Model: ModelTierMax}, "test-max"},
+		{"skill model fills empty scan model", withModel.ID, ScanOpts{}, "test-exact"},
+		{"skill model fills invalid scan model", withModel.ID, ScanOpts{Model: "garbage"}, "test-exact"},
+		{"skill tier resolves through settings", withTier.ID, ScanOpts{}, "test-mid"},
+		{"generic skill defaults to high tier", noModel.ID, ScanOpts{}, "test-high"},
+		{"metadata skill uses mid tier", metadata.ID, ScanOpts{}, "test-mid"},
+		{"deep dive skill uses max tier", deepDive.ID, ScanOpts{}, "test-max"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2212,11 +2351,13 @@ func TestRepoShow_findingsTabAggregatesAcrossScans(t *testing.T) {
 	repo := db.Repository{URL: "https://example.com/agg", Name: "agg"}
 	s.DB.Create(&repo)
 
-	// Older deep-dive scan with two findings, one of which is rejected.
+	// Older deep-dive scan with findings in active and closed states.
 	older := db.Scan{RepositoryID: repo.ID, Kind: "skill", SkillName: deepDiveSkillName, Status: db.ScanDone}
 	s.DB.Create(&older)
 	s.DB.Create(&db.Finding{ScanID: older.ID, RepositoryID: repo.ID, Title: "old-high", Severity: "High", Status: db.FindingNew})
 	s.DB.Create(&db.Finding{ScanID: older.ID, RepositoryID: repo.ID, Title: "old-noise", Severity: "Low", Status: db.FindingRejected})
+	s.DB.Create(&db.Finding{ScanID: older.ID, RepositoryID: repo.ID, Title: "old-fixed", Severity: "High", Status: db.FindingFixed})
+	s.DB.Create(&db.Finding{ScanID: older.ID, RepositoryID: repo.ID, Title: "old-published", Severity: "High", Status: db.FindingPublished})
 
 	// A non-deep-dive skill also produced a finding.
 	other := db.Scan{RepositoryID: repo.ID, Kind: "skill", SkillName: "secrets", Status: db.ScanDone}
@@ -2241,8 +2382,10 @@ func TestRepoShow_findingsTabAggregatesAcrossScans(t *testing.T) {
 	if !strings.Contains(body, "leaked-key") {
 		t.Errorf("finding from non-deep-dive skill not shown")
 	}
-	if strings.Contains(body, "old-noise") {
-		t.Errorf("rejected finding should be hidden from the tab")
+	for _, hidden := range []string{"old-noise", "old-fixed", "old-published"} {
+		if strings.Contains(body, hidden) {
+			t.Errorf("closed finding %q should be hidden from the tab", hidden)
+		}
 	}
 	// Deep-dive output and tool-scanner output render in separate tabs so the
 	// curated audit list isn't drowned out by lint noise.
@@ -2256,6 +2399,128 @@ func TestRepoShow_findingsTabAggregatesAcrossScans(t *testing.T) {
 	}
 	if !strings.Contains(scannerPanel, "leaked-key") || strings.Contains(scannerPanel, "old-high") {
 		t.Errorf("Scanners tab should hold non-deep-dive results only")
+	}
+}
+
+func TestRepoShow_tabRowCapAppliesAndShowsNotice(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	repo := db.Repository{URL: "https://example.com/cap", Name: "cap", Owner: "capowner"}
+	s.DB.Create(&repo)
+	scan := db.Scan{RepositoryID: repo.ID, Kind: "skill", SkillName: deepDiveSkillName, Status: db.ScanDone}
+	s.DB.Create(&scan)
+
+	// Seed past the cap on findings, dependents, and advisories so each tab
+	// renders exactly tabRowCap rows plus the "Showing N of M" notice. Batched
+	// inserts keep the test under a second.
+	over := tabRowCap + 5
+	fs := make([]db.Finding, over)
+	deps := make([]db.Dependent, over)
+	advs := make([]db.Advisory, over)
+	for i := range over {
+		fs[i] = db.Finding{ScanID: scan.ID, RepositoryID: repo.ID,
+			Title: fmt.Sprintf("f%d", i), Severity: "High", Status: db.FindingNew}
+		deps[i] = db.Dependent{RepositoryID: repo.ID, Name: fmt.Sprintf("dep%d", i), Ecosystem: "npm"}
+		advs[i] = db.Advisory{RepositoryID: repo.ID, Title: fmt.Sprintf("a%d", i), Severity: "High"}
+	}
+	s.DB.CreateInBatches(&fs, 100)
+	s.DB.CreateInBatches(&deps, 100)
+	s.DB.CreateInBatches(&advs, 100)
+
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, localReq("GET", fmt.Sprintf("/repositories/%d", repo.ID)))
+	if w.Code != 200 {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+	body := w.Body.String()
+	// Each capped tab shows exactly tabRowCap rows.
+	if n := strings.Count(body, `id="finding-card-`); n != tabRowCap {
+		t.Errorf("rendered %d finding cards, want %d", n, tabRowCap)
+	}
+	notice := fmt.Sprintf("Showing %d of %d.", tabRowCap, over)
+	if got := strings.Count(body, notice); got != 3 {
+		t.Errorf("found %d %q notices, want 3 (findings, dependents, advisories)", got, notice)
+	}
+	if !strings.Contains(body, "/findings?owner=capowner&amp;category=") {
+		t.Error("findings cap notice should link to the owner+category-filtered findings index")
+	}
+}
+
+func TestRepoShow_depsCapAppliesAfterRuntimeFilter(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	repo := db.Repository{URL: "https://example.com/deps", Name: "deps"}
+	s.DB.Create(&repo)
+
+	// Seed tabRowCap+5 dev deps (sort early by ecosystem) and 3 runtime deps
+	// (sort later). Before the fix, the cap fired on the dev deps and the
+	// runtime-only default view came up empty.
+	devDeps := make([]db.Dependency, tabRowCap+5)
+	for i := range devDeps {
+		devDeps[i] = db.Dependency{RepositoryID: repo.ID, Name: fmt.Sprintf("dev%03d", i),
+			Ecosystem: "aaa", DependencyType: db.DependencyDev, ManifestPath: "package.json"}
+	}
+	s.DB.CreateInBatches(&devDeps, 100)
+	for i := range 3 {
+		s.DB.Create(&db.Dependency{RepositoryID: repo.ID, Name: fmt.Sprintf("rt%d", i),
+			Ecosystem: "zzz", DependencyType: db.DependencyRuntime, ManifestPath: "package.json"})
+	}
+
+	// Default (runtime-only) view shows the 3 runtime deps and no cap notice.
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, localReq("GET", fmt.Sprintf("/repositories/%d", repo.ID)))
+	if w.Code != 200 {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+	body := w.Body.String()
+	for _, want := range []string{"rt0", "rt1", "rt2"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("runtime-only view missing %q (cap fired before filter)", want)
+		}
+	}
+	if strings.Contains(body, "Dependency list capped") {
+		t.Error("runtime-only view should not show cap notice (only 3 runtime deps)")
+	}
+	if !strings.Contains(body, fmt.Sprintf("%d test/build/dev row(s) hidden", tabRowCap+5)) {
+		t.Error("hidden-deps count should be the SQL total, not capped")
+	}
+
+	// deps=all view caps at tabRowCap and shows the notice with the all-deps total.
+	w = httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, localReq("GET", fmt.Sprintf("/repositories/%d?deps=all", repo.ID)))
+	body = w.Body.String()
+	if !strings.Contains(body, fmt.Sprintf("first %d of %d rows", tabRowCap, tabRowCap+5+3)) {
+		t.Errorf("deps=all view missing cap notice with total=%d", tabRowCap+5+3)
+	}
+}
+
+func TestFindingShow_historyCapAppliesAndShowsNotice(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	repo := db.Repository{URL: "https://example.com/hist", Name: "hist"}
+	s.DB.Create(&repo)
+	scan := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone}
+	s.DB.Create(&scan)
+	f := db.Finding{ScanID: scan.ID, RepositoryID: repo.ID, Title: "t", Severity: "High"}
+	s.DB.Create(&f)
+
+	over := historyRowCap + 5
+	rows := make([]db.FindingHistory, over)
+	for i := range over {
+		rows[i] = db.FindingHistory{FindingID: f.ID, Field: "observed",
+			NewValue: fmt.Sprintf("scan %d", i), Source: db.SourceTool}
+	}
+	s.DB.CreateInBatches(&rows, 100)
+
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, localReq("GET", fmt.Sprintf("/findings/%d", f.ID)))
+	if w.Code != 200 {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+	body := w.Body.String()
+	notice := fmt.Sprintf("Showing %d of %d.", historyRowCap, over)
+	if !strings.Contains(body, notice) {
+		t.Errorf("missing history cap notice %q", notice)
 	}
 }
 

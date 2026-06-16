@@ -71,8 +71,9 @@ func (s *Server) settingsShow(w http.ResponseWriter, r *http.Request) {
 	s.DB.Table("scans").Count(&stats.Scans)
 	// Split findings the same way the repo page does: deep-dive (curated
 	// audit) findings versus tool-scanner output (zizmor, semgrep, …).
-	s.DB.Model(&db.Finding{}).Where("scan_id IN (?)", deepDiveScanIDs(s.DB)).Count(&stats.Findings)
-	s.DB.Model(&db.Finding{}).Where("scan_id NOT IN (?)", deepDiveScanIDs(s.DB)).Count(&stats.ScannerFindings)
+	dd := deepDiveScanIDs(s.DB)
+	s.DB.Model(&db.Finding{}).Where("scan_id IN (?)", dd).Count(&stats.Findings)
+	s.DB.Model(&db.Finding{}).Where("scan_id NOT IN (?)", dd).Count(&stats.ScannerFindings)
 	s.DB.Table("packages").Count(&stats.Packages)
 	s.DB.Table("advisories").Count(&stats.Advisories)
 	s.DB.Table("maintainers").Count(&stats.Maintainers)
@@ -98,7 +99,8 @@ func (s *Server) settingsShow(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, "settings.html", map[string]any{
 		"Themes":           config.Themes,
 		"Models":           Models,
-		"DefaultModel":     DefaultModel(),
+		"ModelTiers":       ModelTiers,
+		"TierModels":       ModelTierValues(s.DB),
 		"Efforts":          Efforts,
 		"DefaultEffort":    DefaultEffort(),
 		"ColorScheme":      resolveColorScheme(r),
@@ -174,6 +176,20 @@ func (s *Server) settingsUpdateModel(w http.ResponseWriter, r *http.Request) {
 	model := r.FormValue("model")
 	if !ValidModel(model) {
 		http.Error(w, "unknown model", http.StatusUnprocessableEntity)
+		return
+	}
+	tier := r.FormValue("tier")
+	if tier != "" {
+		if !ValidModelTier(tier) {
+			http.Error(w, "unknown model tier", http.StatusUnprocessableEntity)
+			return
+		}
+		if err := db.SetSetting(s.DB, modelTierSettingKey(tier), model); err != nil {
+			http.Error(w, "could not save setting", http.StatusInternalServerError)
+			return
+		}
+		setFlash(w, Flash{Category: successKey, Title: "Model tier updated"})
+		s.redirect(w, r, "/settings")
 		return
 	}
 	SetDefaultModel(model)

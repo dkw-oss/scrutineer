@@ -256,7 +256,7 @@ func osvCredits(f db.Finding) []osvCredit {
 	return out
 }
 
-var ghsaRE = regexp.MustCompile(`(?i)GHSA(-[0-9a-z]{4}){3}`)
+var ghsaRE = regexp.MustCompile(db.GHSAIDPattern)
 
 // gitSHARE matches the full commit hashes a GIT range event accepts (the
 // schema constrains introduced/fixed to ^(0|[a-f0-9]{40}|[a-f0-9]{64})$). A
@@ -264,8 +264,8 @@ var ghsaRE = regexp.MustCompile(`(?i)GHSA(-[0-9a-z]{4}){3}`)
 // export; it still surfaces in the references and database_specific.
 var gitSHARE = regexp.MustCompile(`^([a-f0-9]{40}|[a-f0-9]{64})$`)
 
-// osvAliases collects upstream identifiers: the finding's CVE plus any GHSA id
-// found in a reference URL or summary. De-duplicated, CVE first.
+// osvAliases collects upstream identifiers: the finding's CVE and GHSA id plus
+// any GHSA id found in a reference URL or summary. De-duplicated, CVE first.
 func osvAliases(f db.Finding, refs []db.FindingReference) []string {
 	seen := map[string]bool{}
 	var out []string
@@ -277,6 +277,7 @@ func osvAliases(f db.Finding, refs []db.FindingReference) []string {
 		out = append(out, id)
 	}
 	add(f.CVEID)
+	add(f.GHSAID)
 	for _, r := range refs {
 		add(ghsaRE.FindString(r.URL))
 		add(ghsaRE.FindString(r.Summary))

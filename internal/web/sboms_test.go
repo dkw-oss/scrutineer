@@ -99,6 +99,101 @@ func TestSBOMUpload_rejectsUnrecognized(t *testing.T) {
 	}
 }
 
+func TestSBOMResolveHandler(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	s.resolveSync = true
+	s.resolvePURL = func(_ context.Context, purl string) string {
+		if strings.Contains(purl, "lodash") {
+			return "https://github.com/lodash/lodash"
+		}
+		return ""
+	}
+	triage := db.Skill{Name: defaultSkillName, Body: "b", Active: true}
+	s.DB.Create(&triage)
+
+	up := db.SBOMUpload{Name: "demo", Packages: []db.SBOMPackage{
+		{Name: "lodash", PURL: "pkg:npm/lodash@4.17.21"},
+	}}
+	s.DB.Create(&up)
+
+	r := localReq("POST", fmt.Sprintf("/sboms/%d/resolve", up.ID))
+	r.Header.Set("Sec-Fetch-Site", "same-origin")
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303; body=%s", w.Code, w.Body)
+	}
+	if loc := w.Header().Get("Location"); loc != fmt.Sprintf("/sboms/%d", up.ID) {
+		t.Errorf("Location = %q", loc)
+	}
+
+	var pkg db.SBOMPackage
+	s.DB.Where("sbom_upload_id = ?", up.ID).First(&pkg)
+	if pkg.RepositoryID == nil {
+		t.Errorf("package not linked after resolve handler: %+v", pkg)
+	}
+
+	r = localReq("POST", "/sboms/999999/resolve")
+	r.Header.Set("Sec-Fetch-Site", "same-origin")
+	w = httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("missing upload: status = %d, want 404", w.Code)
+	}
+}
+
+func TestSBOMDelete(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	up := db.SBOMUpload{Name: "doomed", Packages: []db.SBOMPackage{
+		{Name: "lodash", PURL: "pkg:npm/lodash@4.17.21"},
+	}}
+	s.DB.Create(&up)
+
+	r := localReq("POST", fmt.Sprintf("/sboms/%d/delete", up.ID))
+	r.Header.Set("Sec-Fetch-Site", "same-origin")
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303; body=%s", w.Code, w.Body)
+	}
+	if loc := w.Header().Get("Location"); loc != "/sboms" {
+		t.Errorf("Location = %q, want /sboms", loc)
+	}
+
+	var n int64
+	s.DB.Model(&db.SBOMUpload{}).Where("id = ?", up.ID).Count(&n)
+	if n != 0 {
+		t.Errorf("upload count = %d, want 0", n)
+	}
+}
+
+func TestSBOMList_paginates(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	for i := range perPage + 5 {
+		s.DB.Create(&db.SBOMUpload{Name: fmt.Sprintf("sbom%d", i), Format: "cyclonedx"})
+	}
+
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, localReq("GET", "/sboms"))
+	body := w.Body.String()
+	if n := strings.Count(body, `<tr id="sbom-`); n != perPage {
+		t.Errorf("page 1 rendered %d rows, want %d", n, perPage)
+	}
+	if !strings.Contains(body, "of 2") {
+		t.Errorf("page 1 missing pagination 'of 2'")
+	}
+
+	w = httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, localReq("GET", "/sboms?page=2"))
+	body = w.Body.String()
+	if n := strings.Count(body, `<tr id="sbom-`); n != 5 {
+		t.Errorf("page 2 rendered %d rows, want 5", n)
+	}
+}
+
 func TestSBOMResolve_linksRepoAndEnqueuesTriage(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()
@@ -156,7 +251,10 @@ func TestSBOMShow_aggregatesFindings(t *testing.T) {
 	scan := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone}
 	s.DB.Create(&scan)
 	s.DB.Create(&db.Finding{ScanID: scan.ID, RepositoryID: repo.ID, Title: "rce-in-r", Severity: "High", Status: db.FindingTriaged})
-	s.DB.Create(&db.Finding{ScanID: scan.ID, RepositoryID: repo.ID, Title: "noise", Severity: "Low", Status: db.FindingRejected})
+	s.DB.Create(&db.Finding{ScanID: scan.ID, RepositoryID: repo.ID, Title: "fixed-noise", Severity: "Low", Status: db.FindingFixed})
+	s.DB.Create(&db.Finding{ScanID: scan.ID, RepositoryID: repo.ID, Title: "published-noise", Severity: "Low", Status: db.FindingPublished})
+	s.DB.Create(&db.Finding{ScanID: scan.ID, RepositoryID: repo.ID, Title: "rejected-noise", Severity: "Low", Status: db.FindingRejected})
+	s.DB.Create(&db.Finding{ScanID: scan.ID, RepositoryID: repo.ID, Title: "duplicate-noise", Severity: "Low", Status: db.FindingDuplicate})
 
 	other := db.Repository{URL: "https://example.com/other", Name: "other"}
 	s.DB.Create(&other)
@@ -176,8 +274,10 @@ func TestSBOMShow_aggregatesFindings(t *testing.T) {
 	if !strings.Contains(body, "rce-in-r") {
 		t.Errorf("finding from linked repo not shown")
 	}
-	if strings.Contains(body, "noise") {
-		t.Errorf("rejected finding should be hidden")
+	for _, hidden := range []string{"fixed-noise", "published-noise", "rejected-noise", "duplicate-noise"} {
+		if strings.Contains(body, hidden) {
+			t.Errorf("closed finding %q should be hidden", hidden)
+		}
 	}
 	if strings.Contains(body, "unrelated") {
 		t.Errorf("finding from unlinked repo should not be shown")

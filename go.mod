@@ -6,6 +6,7 @@ toolchain go1.26.4
 
 require (
 	filippo.io/age v1.3.1
+	github.com/git-pkgs/pom v0.1.4
 	github.com/git-pkgs/purl v0.1.12
 	github.com/git-pkgs/sbom v0.1.2
 	github.com/glebarez/sqlite v1.11.0
@@ -35,6 +36,9 @@ require (
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	golang.org/x/sys v0.46.0 // indirect
 	golang.org/x/text v0.38.0 // indirect
+	github.com/rogpeppe/go-internal v1.14.1 // indirect
+	golang.org/x/sys v0.46.0 // indirect
+	golang.org/x/text v0.36.0 // indirect
 	modernc.org/libc v1.72.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect

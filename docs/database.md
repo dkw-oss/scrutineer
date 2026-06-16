@@ -46,7 +46,7 @@ One row per skill execution or external import. `skill_name` / `skill_version` p
 | kind | text | `skill` for native scans, `import` for findings ingested via `POST /api/v1/import`. |
 | status | text | `queued`, `paused`, `running`, `done`, `failed`, `cancelled`. Stale `running` rows are swept to `failed` on startup. |
 | status_priority | integer | Denormalised sort key for the scans index: 0 running, 1 queued, 2 paused, 3 terminal. |
-| model | text | Claude model ID. |
+| model | text | Claude model ID resolved from the explicit scan model, skill model preference, or skill default model tier at enqueue time. |
 | effort | text | Claude `--effort` level (`low`–`max`) snapshotted from the runtime setting at enqueue. Empty on legacy rows; the runner falls back to its configured default. |
 | skill_id | integer FK | References `skills.id`. Null for legacy non-skill rows. |
 | skill_version | integer | Version of the skill at run time; the skill row's `version` bumps on every edit so older scans stay readable. |
@@ -135,6 +135,7 @@ One row per vulnerability. Lifecycle columns are mutated through `db.WriteFindin
 | imported_from | text | Originating tool name when the finding came in via `POST /api/v1/import`; empty for native scans. |
 | affected | text | Version range, e.g. `>=0.2.0, <=4.0.5`. |
 | cve_id | text | e.g. `CVE-2026-12345`. |
+| ghsa_id | text | GitHub Security Advisory id, e.g. `GHSA-xxxx-xxxx-xxxx`; set once the advisory is published on GitHub. |
 | cvss_vector | text | CVSS v3.x base vector, e.g. `CVSS:3.1/AV:N/AC:L/...`. |
 | cvss_score | real | Derived from `cvss_vector` on write. Cleared when the vector is empty or unparseable. |
 | cvss_v4_vector | text | CVSS v4.0 base vector, e.g. `CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N`. Stored independently of `cvss_vector` because the v4 metric set and scoring formula differ. |
@@ -263,6 +264,8 @@ Package dependencies discovered by the `dependencies` skill. Replaced wholesale 
 | ecosystem | text | PURL type, e.g. `gem`, `npm`, `golang`. Derived from `p_url` (or the source ecosystem string when no PURL was recorded). Indexed. |
 | p_url | text | Package URL. |
 | requirement | text | Version constraint from the manifest. |
+| requirement_unresolved | boolean | True when `requirement` still contains an unresolved manifest expression such as `${project.version}`. |
+| requirement_resolution | text | Resolver tag for `requirement`, e.g. `resolved`, `unresolved_property`, `unresolved_env`, `unresolved_parent`, `unresolved_profile_gated`, or `unresolved_missing`. |
 | dependency_type | text | Normalised dependency phase: `runtime`, `dev`, `test`, `build`, or an unrecognised source value kept verbatim. |
 | manifest_path | text | Which file declared this dependency. |
 | manifest_kind | text | `manifest` or `lockfile`. |

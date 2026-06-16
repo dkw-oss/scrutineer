@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -153,7 +154,8 @@ func New(gdb *gorm.DB, q *queue.Queue, log *slog.Logger, broker *Broker, w *work
 			}
 			return m
 		},
-		"list": func(xs ...string) []string { return xs },
+		"list":  func(xs ...string) []string { return xs },
+		"len64": tmplLen64,
 		"cwename": func(id string) string {
 			if _, c, ok := LookupCWE(id); ok {
 				return c.Name
@@ -304,6 +306,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /scans/pause-queued", s.scansPauseQueued)
 	mux.HandleFunc("POST /scans/resume-paused", s.scansResumePaused)
 	mux.HandleFunc("POST /scans/retry-failed", s.scansRetryFailed)
+	mux.HandleFunc("POST /scans/cancel-all", s.scansCancelAll)
 	mux.HandleFunc("POST /scans/{id}/cancel", s.scanCancel)
 	mux.HandleFunc("GET /scans/{id}/log", s.scanLog)
 	mux.HandleFunc("GET /usage", s.usage)
@@ -424,15 +427,38 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 const (
 	perPage     = 20
 	defaultSort = "newest"
-	statusKey   = "status"
-	errorKey    = "error"
-	successKey  = "success"
-	warningKey  = "warning"
+	// tabRowCap bounds per-tab collections on detail pages (repo Findings,
+	// Dependencies, Dependents, Advisories; SBOM Findings/Advisories). The
+	// tabs are summary views: when a repo has more rows than this, the page
+	// shows the first N with a count and a link to the full filtered index.
+	tabRowCap = 200
+	// historyRowCap bounds the FindingHistory list on a finding page. A
+	// finding observed across hundreds of rescans accumulates one row each;
+	// only the most recent are useful inline.
+	historyRowCap  = 100
+	statusKey      = "status"
+	allStatusValue = "all"
+	errorKey       = "error"
+	successKey     = "success"
+	warningKey     = "warning"
 	// sortRepository and sortSeverity are the shared sort options used by
 	// the findings, scans, advisories, and SBOM indexes.
 	sortRepository = "repository"
 	sortSeverity   = "severity"
 )
+
+// tmplLen64 is the len64 template func: returns len(v) as an int64 for
+// comparison against COUNT(*)-typed totals. Non-len-able or nil values
+// return 0 instead of panicking so a stray template arg renders as
+// "not capped" rather than 500ing the page.
+func tmplLen64(v any) int64 {
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Slice, reflect.Array, reflect.Map, reflect.String, reflect.Chan:
+		return int64(rv.Len())
+	}
+	return 0
+}
 
 type Page struct {
 	N     int
@@ -560,7 +586,7 @@ func (s *Server) repoList(w http.ResponseWriter, r *http.Request) {
 			Select("repository_id, COUNT(*) AS n").
 			Where("repository_id IN ?", repoIDs).
 			Where("scan_id IN (?)", deepDiveScanIDs(s.DB)).
-			Where("status NOT IN ?", repoListClosedFindingStatuses).
+			Where("status NOT IN ?", db.ClosedFindingLifecycles).
 			Group("repository_id").
 			Scan(&counts)
 		for _, c := range counts {
@@ -702,78 +728,74 @@ func firstNonEmpty(vals ...string) string {
 // When category is non-empty, only the deep-dive slice is narrowed to the
 // View-1400 bucket; scanner findings are returned unfiltered so the Scanners
 // tab stays reachable.
-func loadRepoFindings(gdb *gorm.DB, repoID uint, category string) ([]db.Finding, []db.Finding, map[uint]string, map[uint]string) {
-	var all []db.Finding
-	gdb.Where("repository_id = ? AND status NOT IN ?", repoID,
-		[]db.FindingLifecycle{db.FindingRejected, db.FindingDuplicate}).
-		Order(severityOrder).Order("id desc").Find(&all)
+func loadRepoFindings(gdb *gorm.DB, repoID uint, category string) repoFindings {
+	base := func() *gorm.DB {
+		return gdb.Model(&db.Finding{}).
+			Where("repository_id = ? AND status NOT IN ?", repoID, db.ClosedFindingLifecycles)
+	}
 
-	scanSkill := map[uint]string{}
-	scanCommit := map[uint]string{}
-	if len(all) == 0 {
-		return nil, nil, scanSkill, scanCommit
+	ddQ := base().Where("scan_id IN (?)", deepDiveScanIDs(gdb))
+	if category != "" {
+		ddQ = applyCWECategoryFilter(ddQ, category)
+	}
+	var rf repoFindings
+	ddQ.Count(&rf.DeepDiveTotal)
+	ddQ.Order(severityOrder).Order("id desc").Limit(tabRowCap).Find(&rf.DeepDive)
+
+	scQ := base().Where("scan_id NOT IN (?)", deepDiveScanIDs(gdb))
+	scQ.Count(&rf.ScannersTotal)
+	scQ.Order(severityOrder).Order("id desc").Limit(tabRowCap).Find(&rf.Scanners)
+
+	rf.ScanSkill = map[uint]string{}
+	rf.ScanCommit = map[uint]string{}
+	if len(rf.DeepDive)+len(rf.Scanners) == 0 {
+		return rf
+	}
+	scanIDs := make([]uint, 0, len(rf.DeepDive)+len(rf.Scanners))
+	seen := map[uint]bool{}
+	for _, f := range append(rf.DeepDive, rf.Scanners...) {
+		if !seen[f.ScanID] {
+			seen[f.ScanID] = true
+			scanIDs = append(scanIDs, f.ScanID)
+		}
 	}
 	var rows []struct {
 		ID        uint
 		SkillName string
 		Commit    string
 	}
-	gdb.Raw("SELECT id, COALESCE(skill_name, '') AS skill_name, COALESCE(`commit`, '') AS `commit` FROM scans WHERE repository_id = ?", repoID).Scan(&rows)
+	gdb.Raw("SELECT id, COALESCE(skill_name, '') AS skill_name, COALESCE(`commit`, '') AS `commit` FROM scans WHERE id IN ?", scanIDs).Scan(&rows)
 	for _, row := range rows {
-		scanSkill[row.ID] = row.SkillName
-		scanCommit[row.ID] = row.Commit
+		rf.ScanSkill[row.ID] = row.SkillName
+		rf.ScanCommit[row.ID] = row.Commit
 	}
-	var deepDive, scanners []db.Finding
-	for _, f := range all {
-		name := scanSkill[f.ScanID]
-		if name == "" || name == deepDiveSkillName {
-			if category != "" && !findingMatchesCategory(f.CWE, category) {
-				continue
-			}
-			deepDive = append(deepDive, f)
-		} else {
-			scanners = append(scanners, f)
-		}
-	}
-	return deepDive, scanners, scanSkill, scanCommit
+	return rf
+}
+
+// repoFindings carries the two capped finding sets for a repo's tabs plus
+// the per-scan lookup maps the template needs to render the producing skill
+// name and the location-link commit.
+type repoFindings struct {
+	DeepDive      []db.Finding
+	DeepDiveTotal int64
+	Scanners      []db.Finding
+	ScannersTotal int64
+	ScanSkill     map[uint]string
+	ScanCommit    map[uint]string
 }
 
 func (s *Server) findings(w http.ResponseWriter, r *http.Request) {
-	q := s.DB.Model(&db.Finding{})
 	// Default to deep-dive findings only; scanner skills (zizmor, semgrep)
 	// are noisy enough to drown out the audit list. ?scanners=1 includes
 	// them and is exposed as a toggle in the UI.
 	scanners := r.URL.Query().Get("scanners") == "1"
-	if !scanners {
-		q = q.Where("scan_id IN (?)", deepDiveScanIDs(s.DB))
-	}
+	q := s.findingsIndexQuery(r, scanners, true)
 	sev := r.URL.Query().Get("severity")
-	if sev != "" {
-		q = q.Where("severity = ?", sev)
-	}
 	status := r.URL.Query().Get(statusKey)
-	if status != "" {
-		q = q.Where("status = ?", status)
-	}
 	category := r.URL.Query().Get("category")
-	if category != "" {
-		q = applyCWECategoryFilter(q, category)
-	}
 	owner := r.URL.Query().Get("owner")
-	if owner != "" {
-		q = q.Where("repository_id IN (?)",
-			s.DB.Model(&db.Repository{}).Select("id").Where("owner = ?", owner))
-	}
 	missed := r.URL.Query().Get("missed") == "1"
-	if missed {
-		q = q.Where("missed_count > 0")
-	}
 	search := strings.TrimSpace(r.URL.Query().Get("q"))
-	if search != "" {
-		like := "%" + search + "%"
-		q = q.Where("title LIKE ? OR location LIKE ? OR cwe LIKE ? OR cve_id LIKE ? OR affected LIKE ?",
-			like, like, like, like, like)
-	}
 
 	sort := r.URL.Query().Get("sort")
 	switch sort {
@@ -802,13 +824,7 @@ func (s *Server) findings(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
-	var missedTotal int64
-	s.DB.Model(&db.Finding{}).Where("missed_count > 0").Count(&missedTotal)
-
-	var scannerTotal int64
-	s.DB.Model(&db.Finding{}).
-		Where("scan_id NOT IN (?)", deepDiveScanIDs(s.DB)).
-		Count(&scannerTotal)
+	missedTotal, scannerTotal := s.findingToggleCounts(r, scanners)
 
 	s.render(w, r, "findings.html", map[string]any{
 		"Findings": rows, "Page": page, "Severity": sev, "Sort": sort,
@@ -818,6 +834,116 @@ func (s *Server) findings(w http.ResponseWriter, r *http.Request) {
 		"Scanners": scanners, "ScannerTotal": scannerTotal,
 		"Status": status, "Statuses": db.FindingLifecycles,
 	})
+}
+
+func (s *Server) findingsIndexQuery(r *http.Request, includeScanners, includeMissed bool) *gorm.DB {
+	q := s.DB.Model(&db.Finding{})
+	if !includeScanners {
+		q = q.Where("scan_id IN (?)", deepDiveScanIDs(s.DB))
+	}
+	if sev := r.URL.Query().Get("severity"); sev != "" {
+		q = q.Where("severity = ?", sev)
+	}
+	q = applyFindingStatusFilter(q, r.URL.Query().Get(statusKey))
+	if category := r.URL.Query().Get("category"); category != "" {
+		q = applyCWECategoryFilter(q, category)
+	}
+	if owner := r.URL.Query().Get("owner"); owner != "" {
+		q = q.Where("repository_id IN (?)",
+			s.DB.Model(&db.Repository{}).Select("id").Where("owner = ?", owner))
+	}
+	if includeMissed && r.URL.Query().Get("missed") == "1" {
+		q = q.Where("missed_count > 0")
+	}
+	if search := strings.TrimSpace(r.URL.Query().Get("q")); search != "" {
+		like := "%" + search + "%"
+		q = q.Where("title LIKE ? OR location LIKE ? OR cwe LIKE ? OR cve_id LIKE ? OR ghsa_id LIKE ? OR affected LIKE ?",
+			like, like, like, like, like, like)
+	}
+	return q
+}
+
+func (s *Server) findingToggleCounts(r *http.Request, scanners bool) (int64, int64) {
+	missedWhere, missedArgs := findingIndexWhereSQL(r, scanners, false)
+	missedWhere = append(missedWhere, "missed_count > 0")
+
+	scannerWhere, scannerArgs := findingIndexWhereSQL(r, true, true)
+	scannerWhere = append(scannerWhere, "scan_id NOT IN (SELECT id FROM scans WHERE skill_name = ? OR skill_name = '' OR skill_name IS NULL)")
+	scannerArgs = append(scannerArgs, deepDiveSkillName)
+
+	var counts struct {
+		MissedTotal  int64
+		ScannerTotal int64
+	}
+	sql := fmt.Sprintf(
+		"SELECT (SELECT COUNT(*) FROM findings WHERE %s) AS missed_total, (SELECT COUNT(*) FROM findings WHERE %s) AS scanner_total",
+		strings.Join(missedWhere, " AND "),
+		strings.Join(scannerWhere, " AND "),
+	)
+	args := make([]any, 0, len(missedArgs)+len(scannerArgs))
+	args = append(args, missedArgs...)
+	args = append(args, scannerArgs...)
+	s.DB.Raw(sql, args...).Scan(&counts)
+	return counts.MissedTotal, counts.ScannerTotal
+}
+
+func findingIndexWhereSQL(r *http.Request, includeScanners, includeMissed bool) ([]string, []any) {
+	where := []string{"1 = 1"}
+	var args []any
+	if !includeScanners {
+		where = append(where, "scan_id IN (SELECT id FROM scans WHERE skill_name = ? OR skill_name = '' OR skill_name IS NULL)")
+		args = append(args, deepDiveSkillName)
+	}
+	if sev := r.URL.Query().Get("severity"); sev != "" {
+		where = append(where, "severity = ?")
+		args = append(args, sev)
+	}
+	switch status := r.URL.Query().Get(statusKey); status {
+	case "":
+		where = append(where, "status NOT IN ("+db.ClosedFindingLifecycleSQLValues()+")")
+	case allStatusValue:
+	default:
+		where = append(where, "status = ?")
+		args = append(args, status)
+	}
+	if category := r.URL.Query().Get("category"); category != "" {
+		switch {
+		case category == UncategorizedCWE && len(categorizedIDs) == 0:
+			where = append(where, "cwe = ''")
+		case category == UncategorizedCWE:
+			where = append(where, "(cwe = '' OR cwe NOT IN ?)")
+			args = append(args, categorizedIDs)
+		case len(CWEsInCategory(category)) == 0:
+			where = append(where, "1 = 0")
+		default:
+			where = append(where, "cwe IN ?")
+			args = append(args, CWEsInCategory(category))
+		}
+	}
+	if owner := r.URL.Query().Get("owner"); owner != "" {
+		where = append(where, "repository_id IN (SELECT id FROM repositories WHERE owner = ?)")
+		args = append(args, owner)
+	}
+	if includeMissed && r.URL.Query().Get("missed") == "1" {
+		where = append(where, "missed_count > 0")
+	}
+	if search := strings.TrimSpace(r.URL.Query().Get("q")); search != "" {
+		like := "%" + search + "%"
+		where = append(where, "(title LIKE ? OR location LIKE ? OR cwe LIKE ? OR cve_id LIKE ? OR ghsa_id LIKE ? OR affected LIKE ?)")
+		args = append(args, like, like, like, like, like, like)
+	}
+	return where, args
+}
+
+func applyFindingStatusFilter(q *gorm.DB, status string) *gorm.DB {
+	switch status {
+	case "":
+		return q.Where("status NOT IN ?", db.ClosedFindingLifecycles)
+	case allStatusValue:
+		return q
+	default:
+		return q.Where("status = ?", status)
+	}
 }
 
 func (s *Server) depScan(w http.ResponseWriter, r *http.Request) {
@@ -888,15 +1014,11 @@ const (
 // findings for the surrounding repositories row. Used in the repos list
 // "findings" sort. Tool-scanner skills are excluded so the ordering matches
 // the counts shown in the Findings column.
-const deepDiveFindingsCountSQL = `SELECT COUNT(*) FROM findings f
+var deepDiveFindingsCountSQL = `SELECT COUNT(*) FROM findings f
 	    WHERE f.repository_id = repositories.id
-	      AND f.status NOT IN ('fixed', 'published', 'rejected', 'duplicate')
+	      AND f.status NOT IN (` + db.ClosedFindingLifecycleSQLValues() + `)
 	      AND f.scan_id IN (SELECT id FROM scans
 	        WHERE skill_name = '` + deepDiveSkillName + `' OR skill_name = '' OR skill_name IS NULL)`
-
-var repoListClosedFindingStatuses = []db.FindingLifecycle{
-	db.FindingFixed, db.FindingPublished, db.FindingRejected, db.FindingDuplicate,
-}
 
 // deepDiveScanIDs returns a GORM subquery selecting scan IDs that belong to
 // the curated audit (security-deep-dive) or to legacy/empty skill_name rows.
@@ -1228,7 +1350,10 @@ func (s *Server) findingShow(w http.ResponseWriter, r *http.Request) {
 	var refs []db.FindingReference
 	s.DB.Where("finding_id = ?", f.ID).Order("id desc").Find(&refs)
 	var history []db.FindingHistory
-	s.DB.Where("finding_id = ?", f.ID).Order("created_at desc").Find(&history)
+	var historyTotal int64
+	s.DB.Model(&db.FindingHistory{}).Where("finding_id = ?", f.ID).Count(&historyTotal)
+	s.DB.Where("finding_id = ?", f.ID).Order("created_at desc").
+		Limit(historyRowCap).Find(&history)
 	reviews, _ := db.ListFindingReviews(s.DB, f.ID)
 	latestRevalidate := db.LatestRevalidateVerdict(s.DB, f.ID)
 	var labels []db.FindingLabel
@@ -1278,6 +1403,7 @@ func (s *Server) findingShow(w http.ResponseWriter, r *http.Request) {
 		"Communications":   comms,
 		"References":       refs,
 		"History":          history,
+		"HistoryTotal":     historyTotal,
 		"Reviews":          reviews,
 		"LatestRevalidate": latestRevalidate,
 		"AllLabels":        labels,
@@ -1548,7 +1674,7 @@ func (s *Server) repoShow(w http.ResponseWriter, r *http.Request) {
 		Select("COALESCE(SUM(cost_usd), 0)").Scan(&totalCost)
 
 	category := r.URL.Query().Get("category")
-	findings, scannerFindings, scanSkill, scanCommit := loadRepoFindings(s.DB, repo.ID, category)
+	rf := loadRepoFindings(s.DB, repo.ID, category)
 
 	// Count deep-dive findings still awaiting verification, scoped to the
 	// same category filter as the visible list. Drives the "Verify all new"
@@ -1566,11 +1692,25 @@ func (s *Server) repoShow(w http.ResponseWriter, r *http.Request) {
 	s.DB.Joins("JOIN repository_maintainers ON repository_maintainers.maintainer_id = maintainers.id").
 		Where("repository_maintainers.repository_id = ?", repo.ID).Find(&maintainers)
 
+	// Apply the runtime-only filter in SQL before capping, so the first N
+	// rows on the default tab are runtime deps, not whatever sorts first
+	// by name. hiddenDeps and depsTotal both describe the same set the tab
+	// is rendering.
 	showAllDeps := r.URL.Query().Get("deps") == "all"
+	hiddenTypes := []string{db.DependencyDev, db.DependencyTest, db.DependencyBuild}
+	var hiddenDeps int64
+	s.DB.Model(&db.Dependency{}).
+		Where("repository_id = ? AND dependency_type IN ?", repo.ID, hiddenTypes).
+		Count(&hiddenDeps)
+	depQ := s.DB.Model(&db.Dependency{}).Where("repository_id = ?", repo.ID)
+	if !showAllDeps {
+		depQ = depQ.Where("dependency_type NOT IN ?", hiddenTypes)
+	}
+	var depsTotal int64
+	depQ.Count(&depsTotal)
 	var rawDeps []db.Dependency
-	s.DB.Where("repository_id = ?", repo.ID).Order("ecosystem, name, manifest_kind desc").Find(&rawDeps)
-	visibleDeps, hiddenDeps := filterRepoDeps(rawDeps, showAllDeps)
-	deps := groupDeps(visibleDeps)
+	depQ.Order("ecosystem, name, manifest_kind desc").Limit(tabRowCap).Find(&rawDeps)
+	deps := groupDeps(rawDeps)
 
 	var depsCommit string
 	if len(deps) > 0 {
@@ -1581,10 +1721,16 @@ func (s *Server) repoShow(w http.ResponseWriter, r *http.Request) {
 	s.DB.Where("repository_id = ?", repo.ID).Order("dependent_repos desc, downloads desc").Find(&pkgs)
 
 	var dependents []db.Dependent
-	s.DB.Where("repository_id = ?", repo.ID).Order("dependent_repos desc").Find(&dependents)
+	var dependentsTotal int64
+	s.DB.Model(&db.Dependent{}).Where("repository_id = ?", repo.ID).Count(&dependentsTotal)
+	s.DB.Where("repository_id = ?", repo.ID).Order("dependent_repos desc").
+		Limit(tabRowCap).Find(&dependents)
 
 	var advisories []db.Advisory
-	s.DB.Where("repository_id = ?", repo.ID).Order("cvss_score desc").Find(&advisories)
+	var advisoriesTotal int64
+	s.DB.Model(&db.Advisory{}).Where("repository_id = ?", repo.ID).Count(&advisoriesTotal)
+	s.DB.Where("repository_id = ?", repo.ID).Order("cvss_score desc").
+		Limit(tabRowCap).Find(&advisories)
 
 	knownPURLs := s.lookupKnownPURLs(deps)
 	knownURLs := s.lookupKnownURLs(dependents)
@@ -1634,18 +1780,24 @@ func (s *Server) repoShow(w http.ResponseWriter, r *http.Request) {
 
 	data := map[string]any{
 		"Repo": repo, "Scans": scans, "Latest": latest,
-		"Findings":        findings,
-		"ScannerFindings": scannerFindings,
-		"ScanSkill":       scanSkill,
-		"ScanCommit":      scanCommit,
-		"NewFindingCount": int(newFindings),
-		"FailedScans":     failedScans,
-		"ActiveScans":     int(activeScans),
-		"TotalCost":       totalCost,
-		"DiskBytes":       worker.RepoDiskUsage(s.Worker.DataDir, repo),
-		"TMCommit":        tmCommit,
-		"DepsCommit":      depsCommit,
-		"Deps":            deps, "Pkgs": pkgs, "Dependents": dependents, "Advisories": advisories, "Maintainers": maintainers, "ThreatModel": threatModel,
+		"Findings":             rf.DeepDive,
+		"FindingsTotal":        rf.DeepDiveTotal,
+		"ScannerFindings":      rf.Scanners,
+		"ScannerFindingsTotal": rf.ScannersTotal,
+		"ScanSkill":            rf.ScanSkill,
+		"ScanCommit":           rf.ScanCommit,
+		"NewFindingCount":      int(newFindings),
+		"FailedScans":          failedScans,
+		"ActiveScans":          int(activeScans),
+		"TotalCost":            totalCost,
+		"DiskBytes":            worker.RepoDiskUsage(s.Worker.DataDir, repo),
+		"TMCommit":             tmCommit,
+		"DepsCommit":           depsCommit,
+		"Deps":                 deps, "DepsTotal": depsTotal,
+		"Pkgs":       pkgs,
+		"Dependents": dependents, "DependentsTotal": dependentsTotal,
+		"Advisories": advisories, "AdvisoriesTotal": advisoriesTotal,
+		"Maintainers": maintainers, "ThreatModel": threatModel,
 		"KnownURLs": knownURLs, "KnownPURLs": knownPURLs,
 		"ShowAllDeps": showAllDeps, "HiddenDeps": hiddenDeps,
 		"Skills":        activeSkills,
@@ -1654,6 +1806,7 @@ func (s *Server) repoShow(w http.ResponseWriter, r *http.Request) {
 		"Category":      category,
 		"Categories":    CWECategories(),
 		"Uncategorized": UncategorizedCWE,
+		"TabRowCap":     int64(tabRowCap),
 	}
 	s.render(w, r, "repo_show.html", data)
 }
@@ -1913,7 +2066,8 @@ func (s *Server) enqueueSkillScoped(ctx context.Context, repoID, skillID uint, f
 // enqueueSkillWith creates a skill scan using the given ScanOpts. Empty
 // fields default cleanly: unset FindingID means not-finding-scoped, empty
 // SubPath means root-scoped. Model precedence is: explicit opts.Model >
-// the skill's preferred Model > server default. Effort precedence is:
+// the skill's preferred Model > the high tier. Concrete model IDs win as-is;
+// tier names resolve through Settings. Effort precedence is:
 // explicit opts.Effort > the runtime default effort.
 func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opts ScanOpts) (uint, error) {
 	var repo db.Repository
@@ -1931,13 +2085,10 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 	if err := worker.ValidateGitRef(opts.Ref); err != nil {
 		return 0, fmt.Errorf("%w: %v", ErrInvalidRef, err)
 	}
-	if !ValidModel(opts.Model) {
-		if hasSkill && ValidModel(sk.Model) {
-			opts.Model = sk.Model
-		} else {
-			opts.Model = DefaultModel()
-		}
+	if !ValidModelPreference(opts.Model) && hasSkill {
+		opts.Model = sk.Model
 	}
+	opts.Model = resolveModelPreference(s.DB, opts.Model)
 	if !ValidEffort(opts.Effort) {
 		opts.Effort = DefaultEffort()
 	}
@@ -2036,22 +2187,6 @@ func groupDeps(deps []db.Dependency) []DepGroup {
 		out = append(out, *m[k])
 	}
 	return out
-}
-
-func filterRepoDeps(deps []db.Dependency, includeNonRuntime bool) ([]db.Dependency, int) {
-	if includeNonRuntime {
-		return deps, 0
-	}
-	out := make([]db.Dependency, 0, len(deps))
-	hidden := 0
-	for _, d := range deps {
-		if db.DependencyVisibleByDefault(d.DependencyType) {
-			out = append(out, d)
-		} else {
-			hidden++
-		}
-	}
-	return out, hidden
 }
 
 func preferDependencyForGroup(a, b db.Dependency) bool {
