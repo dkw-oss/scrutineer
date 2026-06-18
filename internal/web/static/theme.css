@@ -399,6 +399,15 @@ pre.log { background: var(--muted); padding: 1rem; border-radius: var(--radius);
 .prose th { background: var(--muted); font-weight: 600; }
 .prose hr { border: none; border-top: 1px solid var(--border); margin: 1.5em 0; }
 
+/* ── skill source blocks (highlighted SKILL.md body / schema.json) ── */
+/* Sit on the standard muted inset like pre.log and .prose pre, and neutralise
+   highlight.js's own near-black panel background so only its token colours show.
+   Without this the .hljs background clashes with the card behind it. The
+   pre.skill-src code selector outranks hljs's .hljs rule on specificity. */
+pre.skill-src { background: var(--muted); padding: 0.75rem; border-radius: var(--radius);
+                overflow-x: auto; }
+pre.skill-src code { background: none; padding: 0; }
+
 /* ── code browser ── */
 #blob { display: block; padding: 0.5rem 0; tab-size: 4; }
 .hl-line { padding-left: 3.5rem; position: relative; }
