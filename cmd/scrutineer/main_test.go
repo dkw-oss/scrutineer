@@ -1,11 +1,18 @@
 package main
 
 import (
+	"crypto/ed25519"
+	"encoding/pem"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
+
+	"filippo.io/age"
+	"golang.org/x/crypto/ssh"
 
 	"scrutineer/internal/config"
 	"scrutineer/internal/worker"
@@ -164,6 +171,229 @@ func TestBuildEgressAllow_hardenedNilConfig(t *testing.T) {
 
 func quietLog() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// writeTestKey writes PEM bytes to a temp file and returns the path.
+func writeTestKey(t *testing.T, data []byte) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "key")
+	if err := os.WriteFile(p, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// genSSHKey returns an unencrypted OpenSSH ed25519 private key PEM and
+// the corresponding public key line.
+func genSSHKey(t *testing.T) (pemBytes []byte, pubLine string) {
+	t.Helper()
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, err := ssh.MarshalPrivateKey(priv, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sshPub, err := ssh.NewPublicKey(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(block), string(ssh.MarshalAuthorizedKey(sshPub))
+}
+
+// genEncryptedSSHKey returns a passphrase-protected OpenSSH ed25519
+// private key PEM.
+func genEncryptedSSHKey(t *testing.T, passphrase []byte) []byte {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, err := ssh.MarshalPrivateKeyWithPassphrase(priv, "", passphrase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(block)
+}
+
+func TestLoadIdentities_unencryptedSSH(t *testing.T) {
+	pemData, _ := genSSHKey(t)
+	ids, err := loadIdentities(writeTestKey(t, pemData))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 1 {
+		t.Fatalf("got %d identities, want 1", len(ids))
+	}
+}
+
+func TestLoadIdentities_encryptedSSH(t *testing.T) {
+	passphrase := []byte("test-passphrase")
+	pemData := genEncryptedSSHKey(t, passphrase)
+
+	// Inject the passphrase so the prompt is not needed.
+	orig := promptPassphrase
+	promptPassphrase = func(string) ([]byte, error) { return passphrase, nil }
+	t.Cleanup(func() { promptPassphrase = orig })
+
+	ids, err := loadIdentities(writeTestKey(t, pemData))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 1 {
+		t.Fatalf("got %d identities, want 1", len(ids))
+	}
+}
+
+func TestLoadIdentities_encryptedSSH_wrongPassphrase(t *testing.T) {
+	pemData := genEncryptedSSHKey(t, []byte("correct"))
+
+	orig := promptPassphrase
+	promptPassphrase = func(string) ([]byte, error) { return []byte("wrong"), nil }
+	t.Cleanup(func() { promptPassphrase = orig })
+
+	_, err := loadIdentities(writeTestKey(t, pemData))
+	if err == nil {
+		t.Fatal("expected error for wrong passphrase")
+	}
+}
+
+func TestLoadIdentities_encryptedSSH_noTerminal(t *testing.T) {
+	pemData := genEncryptedSSHKey(t, []byte("secret"))
+
+	// Use the real promptPassphrase — stdin is not a terminal in tests.
+	orig := promptPassphrase
+	promptPassphrase = defaultPromptPassphrase
+	t.Cleanup(func() { promptPassphrase = orig })
+
+	_, err := loadIdentities(writeTestKey(t, pemData))
+	if err == nil {
+		t.Fatal("expected error when stdin is not a terminal")
+	}
+}
+
+func TestLoadIdentities_ageNative(t *testing.T) {
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids, err := loadIdentities(writeTestKey(t, []byte(id.String()+"\n")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 1 {
+		t.Fatalf("got %d identities, want 1", len(ids))
+	}
+}
+
+func TestLoadRecipients_mixedKeyTypes(t *testing.T) {
+	_, sshPub := genSSHKey(t)
+	ageID, _ := age.GenerateX25519Identity()
+
+	content := "# comment\n" + sshPub + ageID.Recipient().String() + "\n"
+	recs, err := loadRecipients(writeTestKey(t, []byte(content)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 2 {
+		t.Fatalf("got %d recipients, want 2 (one SSH, one age)", len(recs))
+	}
+}
+
+func TestLoadRecipients_empty(t *testing.T) {
+	// A file with only comments and blank lines yields zero recipients.
+	// That must be an error: the operator configured the path expecting
+	// keys, so loading nothing silently would defer the failure to a
+	// confusing 400 at export time.
+	path := writeTestKey(t, []byte("# only a comment\n\n   \n"))
+	_, err := loadRecipients(path)
+	if err == nil {
+		t.Fatal("expected error for a recipients file with no keys")
+	}
+}
+
+func TestExpandHome(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("no home dir available: %v", err)
+	}
+	cases := []struct{ in, want string }{
+		{"", ""},
+		{"/etc/recipients.txt", "/etc/recipients.txt"},
+		{"relative/path", "relative/path"},
+		{"~", home},
+		{"~/.ssh/id_ed25519", filepath.Join(home, ".ssh/id_ed25519")},
+		{"~notme/keys", "~notme/keys"}, // ~user form is left untouched
+	}
+	for _, tc := range cases {
+		got, err := expandHome(tc.in)
+		if err != nil {
+			t.Fatalf("expandHome(%q): %v", tc.in, err)
+		}
+		if got != tc.want {
+			t.Errorf("expandHome(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestNormalizePaths(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if h, _ := os.UserHomeDir(); h != home {
+		t.Skipf("os.UserHomeDir()=%q does not follow $HOME on this platform", h)
+	}
+
+	f := &flags{
+		dataDir:        "~/data",
+		profilesDir:    "~/profiles",
+		recipientsFile: "~/keys/recipients.txt",
+		identityFile:   "/abs/identity", // absolute — left untouched
+		metadataDir:    "~/in-repo",     // in-repo path — must NOT expand
+		skillLocal:     skillDirs{"~/skills-a", "./skills-b"},
+	}
+	if err := f.normalizePaths(); err != nil {
+		t.Fatal(err)
+	}
+
+	checks := []struct{ name, got, want string }{
+		{"dataDir", f.dataDir, filepath.Join(home, "data")},
+		{"profilesDir", f.profilesDir, filepath.Join(home, "profiles")},
+		{"recipientsFile", f.recipientsFile, filepath.Join(home, "keys/recipients.txt")},
+		{"identityFile", f.identityFile, "/abs/identity"},
+		{"metadataDir", f.metadataDir, "~/in-repo"},
+		{"skillLocal[0]", f.skillLocal[0], filepath.Join(home, "skills-a")},
+		{"skillLocal[1]", f.skillLocal[1], "./skills-b"},
+	}
+	for _, c := range checks {
+		if c.got != c.want {
+			t.Errorf("%s = %q, want %q", c.name, c.got, c.want)
+		}
+	}
+}
+
+func TestFlagsMerge_recipientsAndIdentity(t *testing.T) {
+	cfg := &config.Config{
+		RecipientsFile: "/etc/recipients.txt",
+		IdentityFile:   "/etc/identity.key",
+	}
+	f := &flags{set: map[string]bool{}}
+	f.merge(cfg)
+	if f.recipientsFile != cfg.RecipientsFile {
+		t.Errorf("recipientsFile = %q, want %q", f.recipientsFile, cfg.RecipientsFile)
+	}
+	if f.identityFile != cfg.IdentityFile {
+		t.Errorf("identityFile = %q, want %q", f.identityFile, cfg.IdentityFile)
+	}
+}
+
+func TestFlagsMerge_recipientsCliFlagWins(t *testing.T) {
+	cfg := &config.Config{RecipientsFile: "/from/config"}
+	f := &flags{recipientsFile: "/from/cli", set: map[string]bool{"recipients-file": true}}
+	f.merge(cfg)
+	if f.recipientsFile != "/from/cli" {
+		t.Errorf("CLI flag should win, got %q", f.recipientsFile)
+	}
 }
 
 func TestBaseURLHost(t *testing.T) {
