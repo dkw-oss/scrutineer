@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -26,6 +27,40 @@ func TestBuildDockerArgs_ClaudeConfigMount(t *testing.T) {
 		if strings.Contains(a, "/claude-config") || strings.HasPrefix(a, "CLAUDE_CONFIG_DIR=") {
 			t.Errorf("did not expect any claude-config args, got %q in %v", a, without)
 		}
+	}
+}
+
+func TestBuildDockerArgs_KeepIDGating(t *testing.T) {
+	// --userns=keep-id is the rootless-podman bind-mount ownership fix. It must
+	// appear ONLY for rootless podman; docker and rootful podman stay byte-for-
+	// byte as before (no --userns token at all), so this also guards against a
+	// regression that would silently alter the docker arg vector.
+	rootless := DockerRunner{Runtime: ContainerRuntime{Bin: "podman", Rootless: true}}
+	if got := rootless.buildDockerArgs("/work/abs", "img:latest", "", ""); !slices.Contains(got, "--userns=keep-id") {
+		t.Errorf("rootless podman: expected --userns=keep-id in %v", got)
+	}
+
+	for _, d := range []DockerRunner{
+		{}, // docker (zero value)
+		{Runtime: ContainerRuntime{Bin: "docker"}},
+		{Runtime: ContainerRuntime{Bin: "podman"}}, // rootful podman
+	} {
+		got := d.buildDockerArgs("/work/abs", "img:latest", "", "")
+		for _, a := range got {
+			if strings.HasPrefix(a, "--userns") {
+				t.Errorf("runtime %+v: unexpected %q in %v", d.Runtime, a, got)
+			}
+		}
+	}
+
+	// Rootless podman with a resume config dir keeps BOTH the mount and keep-id
+	// so the persisted session store stays host-owned across container restarts.
+	withCfg := rootless.buildDockerArgs("/work/abs", "img:latest", "", "/data/cfg/scan-1")
+	if !slices.Contains(withCfg, "--userns=keep-id") {
+		t.Errorf("rootless+config: expected --userns=keep-id in %v", withCfg)
+	}
+	if !hasAdjacent(withCfg, "-v", "/data/cfg/scan-1:/claude-config") {
+		t.Errorf("rootless+config: expected claude-config mount in %v", withCfg)
 	}
 }
 
@@ -154,6 +189,57 @@ func TestDirSize_IgnoresIrregularEntries(t *testing.T) {
 	}
 	if n != 256 {
 		t.Errorf("dirSize = %d, want 256 (symlinks must not be counted)", n)
+	}
+}
+
+func TestHardenedProbeArgs(t *testing.T) {
+	// The block probe is security-load-bearing: it must run on the per-scan
+	// internal network, carry no proxy env (or it would test the proxy path
+	// instead of raw egress), hit a literal IP (so a pass is not just blocked
+	// DNS), and guard against a curl-less image.
+	block := hardenedEgressBlockArgs("scrutineer-hardened-7", "img:latest")
+	if !hasAdjacent(block, "--network", "scrutineer-hardened-7") {
+		t.Errorf("block probe missing --network: %v", block)
+	}
+	if !hasAdjacent(block, "--cap-drop", "ALL") {
+		t.Errorf("block probe missing --cap-drop ALL: %v", block)
+	}
+	for _, a := range block {
+		if strings.Contains(a, "HTTPS_PROXY") || strings.Contains(a, "HTTP_PROXY") {
+			t.Errorf("block probe must not set proxy env: %v", block)
+		}
+	}
+	joined := strings.Join(block, " ")
+	if !strings.Contains(joined, "1.1.1.1") {
+		t.Errorf("block probe should hit a literal IP: %v", block)
+	}
+	if !strings.Contains(joined, "NOCURL") {
+		t.Errorf("block probe should guard against missing curl: %v", block)
+	}
+
+	// The reach probe must wire the gateway alias the same way the real run
+	// does and target the proxy port through that alias.
+	reach := hardenedProxyReachArgs("scrutineer-hardened-7", "192.0.2.5", "54321", "img:latest")
+	if !hasAdjacent(reach, "--network", "scrutineer-hardened-7") {
+		t.Errorf("reach probe missing --network: %v", reach)
+	}
+	if !hasAdjacent(reach, "--add-host", HostGatewayAlias+":192.0.2.5") {
+		t.Errorf("reach probe missing gateway add-host: %v", reach)
+	}
+	if !strings.Contains(strings.Join(reach, " "), HostGatewayAlias+":54321") {
+		t.Errorf("reach probe should target the proxy port via the alias: %v", reach)
+	}
+}
+
+func TestProxyPortFromURL(t *testing.T) {
+	if port, err := proxyPortFromURL("http://scrutineer:tok@host.docker.internal:54321"); err != nil || port != "54321" {
+		t.Errorf("proxyPortFromURL = %q,%v; want 54321,nil", port, err)
+	}
+	if _, err := proxyPortFromURL("http://host.docker.internal"); err == nil {
+		t.Error("expected error for URL without a port")
+	}
+	if _, err := proxyPortFromURL("://bad"); err == nil {
+		t.Error("expected error for malformed URL")
 	}
 }
 

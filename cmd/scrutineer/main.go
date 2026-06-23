@@ -93,6 +93,7 @@ type flags struct {
 	effort           string
 	defaultModel     string
 	noDocker         bool
+	runtime          string
 	hardened         bool
 	runnerImage      string
 	profilesDir      string
@@ -120,8 +121,9 @@ func parseFlags() *flags {
 	flag.StringVar(&f.addr, "addr", "127.0.0.1:8080", "listen address")
 	flag.StringVar(&f.dataDir, "data", "./data", "data directory (db + workspaces)")
 	flag.StringVar(&f.effort, "effort", "high", "claude effort")
-	flag.BoolVar(&f.noDocker, "no-docker", false, "disable containerised runner even if docker is available")
-	flag.BoolVar(&f.hardened, "hardened", false, "strict sandbox mode: docker required (no --no-docker fallback), egress restricted to *.anthropic.com + host skill API, read-only rootfs, internal docker network")
+	flag.StringVar(&f.runtime, "runtime", "docker", "container runtime: docker or podman (rootless podman supported)")
+	flag.BoolVar(&f.noDocker, "no-docker", false, "disable containerised runner even if a container runtime is available")
+	flag.BoolVar(&f.hardened, "hardened", false, "strict sandbox mode: container runtime required (no --no-docker fallback), egress restricted to *.anthropic.com + host skill API, read-only rootfs, internal network")
 	flag.StringVar(&f.runnerImage, "runner-image", worker.DefaultRunnerImage, "docker image for per-job containers")
 	flag.StringVar(&f.profilesDir, "profiles-dir", "docker/profiles", "directory containing per-ecosystem runner profiles (Dockerfile per profile); empty disables profiles")
 	flag.StringVar(&f.skillsRepo, "skills-repo", "", "clone skills on startup; owner/repo[@ref] or https://host/path[@ref]")
@@ -160,6 +162,9 @@ func (f *flags) merge(cfg *config.Config) {
 	}
 	if cfg.NoDocker != nil && !f.set["no-docker"] {
 		f.noDocker = *cfg.NoDocker
+	}
+	if cfg.Runtime != "" && !f.set["runtime"] {
+		f.runtime = cfg.Runtime
 	}
 	if cfg.Hardened != nil && !f.set["hardened"] {
 		f.hardened = *cfg.Hardened
@@ -280,6 +285,9 @@ func run(log *slog.Logger) error {
 		return err
 	}
 	if err := config.ValidateClone(f.cloneMode); err != nil {
+		return err
+	}
+	if err := config.ValidateRuntime(f.runtime); err != nil {
 		return err
 	}
 	if key := os.Getenv("ANTHROPIC_API_KEY"); strings.HasPrefix(key, "sk-ant-oat") {
@@ -477,28 +485,46 @@ func hashPath(s string) string {
 	return r.Replace(s)
 }
 
+// runtimeSmokeTimeout bounds the rootless keep-id startup check so a hung
+// runtime daemon can't block startup indefinitely.
+const runtimeSmokeTimeout = 30 * time.Second
+
 // setupRunner picks the SkillRunner implementation for the run loop:
-// DockerRunner when docker is in use, LocalClaude otherwise. It also
-// starts the egress proxy, creates the hardened network if requested,
-// and returns the apiBase the worker should advertise to skills (the
-// docker path rewrites it to host.docker.internal so containers can
-// reach the loopback-bound web server).
+// DockerRunner (docker or podman) when a container runtime is in use,
+// LocalClaude otherwise. It also starts the egress proxy, sweeps stale hardened
+// networks, runs the rootless keep-id smoke test, and returns the apiBase the
+// worker advertises to skills (the container path rewrites it to
+// host.docker.internal so containers can reach the loopback-bound web server).
 //
 //nolint:ireturn // dispatched on f.noDocker; concrete types live in the worker pkg
 func setupRunner(f *flags, cfg *config.Config, log *slog.Logger) (worker.SkillRunner, string, error) {
 	apiBase := "http://" + f.addr + "/api"
 	if f.hardened && f.noDocker {
-		return nil, "", fmt.Errorf("--hardened requires the docker runner; remove --no-docker")
-	}
-	if !f.noDocker && !worker.DockerAvailable() {
-		if f.hardened {
-			return nil, "", fmt.Errorf("docker not available: --hardened requires docker, install and start it")
-		}
-		return nil, "", fmt.Errorf("docker not available: install and start docker, or pass --no-docker to run without containerisation (no isolation)")
+		return nil, "", fmt.Errorf("--hardened requires a container runtime; remove --no-docker")
 	}
 	if f.noDocker {
 		log.Info("--no-docker set, using local runner (no isolation)")
 		return worker.LocalClaude{Effort: f.effort, FullClone: f.fullClone(), MaxTurns: f.maxTurns}, apiBase, nil
+	}
+	rt, ok := worker.DetectRuntime(f.runtime)
+	if !ok {
+		if f.hardened {
+			return nil, "", fmt.Errorf("%s not available: --hardened requires a container runtime, install and start it", f.runtime)
+		}
+		return nil, "", fmt.Errorf("%s not available: install and start it, or pass --no-docker to run without containerisation (no isolation)", f.runtime)
+	}
+	// Older podman lacks the host-gateway alias the egress path needs; warn
+	// rather than fail since the hardened path verifies reachability per-scan.
+	if !rt.HostGatewaySupported() {
+		log.Warn("podman may be too old for host-gateway egress; upgrade to >= 4.7", "version", rt.Version)
+	}
+	// Rootless podman needs an adequate /etc/subuid range for --userns=keep-id;
+	// smoke-test it once so a misconfiguration is one clear error here rather
+	// than a cryptic bind-mount failure on every scan.
+	smokeCtx, cancel := context.WithTimeout(context.Background(), runtimeSmokeTimeout)
+	defer cancel()
+	if err := worker.VerifyKeepID(smokeCtx, rt, f.runnerImage); err != nil {
+		return nil, "", err
 	}
 	allow := buildEgressAllow(f.hardened, cfg, f.anthropicBaseURL, log)
 	token := worker.NewProxyToken()
@@ -506,23 +532,24 @@ func setupRunner(f *flags, cfg *config.Config, log *slog.Logger) (worker.SkillRu
 	if err != nil {
 		return nil, "", fmt.Errorf("start egress proxy: %w", err)
 	}
-	// Hardened mode owns its docker networks per-scan, so the gateway
-	// IP must be probed inside RunSkill against the network the runner
-	// is about to attach to. Probing once here would point every scan
-	// at whichever network happened to be probed first. The startup
-	// sweep collects per-scan networks left over by crashed processes.
+	// Hardened mode owns its per-scan networks, so the gateway IP must be
+	// probed inside RunSkill against the network the runner is about to attach
+	// to. Probing once here would point every scan at whichever network
+	// happened to be probed first. The startup sweep collects per-scan networks
+	// left over by crashed processes.
 	var gwIP string
 	if f.hardened {
-		if removed, err := worker.SweepOrphanHardenedNetworks(); err != nil {
+		if removed, err := worker.SweepOrphanHardenedNetworks(rt); err != nil {
 			log.Warn("orphan hardened network sweep failed", "err", err)
 		} else if removed > 0 {
 			log.Info("removed orphan hardened networks", "count", removed)
 		}
 	} else {
-		gwIP = worker.ResolveHostGatewayIPv4(f.runnerImage, "")
+		gwIP = worker.ResolveHostGatewayIPv4(rt, f.runnerImage, "")
 	}
-	log.Info("docker detected, using containerised runner",
-		"image", f.runnerImage, "egress_proxy_port", port, "egress_allow", len(allow),
+	log.Info("container runtime detected, using containerised runner",
+		"runtime", rt.Bin, "rootless", rt.Rootless, "image", f.runnerImage,
+		"egress_proxy_port", port, "egress_allow", len(allow),
 		"host_gateway_ipv4", gwIP, "hardened", f.hardened)
 	// Skills inside the container reach the host via host.docker.internal,
 	// which the egress proxy rewrites to 127.0.0.1 when dialing.
@@ -537,6 +564,7 @@ func setupRunner(f *flags, cfg *config.Config, log *slog.Logger) (worker.SkillRu
 		HostGatewayIP:    gwIP,
 		ProfilesDir:      f.profilesDir,
 		Hardened:         f.hardened,
+		Runtime:          rt,
 	}, apiBase, nil
 }
 

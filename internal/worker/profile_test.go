@@ -391,16 +391,16 @@ func TestImageTag_contentAddressed(t *testing.T) {
 }
 
 func TestResolveBaseDigest_fallsBackToEmpty(t *testing.T) {
-	// An empty ref short-circuits without shelling out to docker.
-	if got := resolveBaseDigest(context.Background(), ""); got != "" {
+	// An empty ref short-circuits without shelling out to the runtime.
+	if got := resolveBaseDigest(context.Background(), ContainerRuntime{}, ""); got != "" {
 		t.Errorf("empty ref: got %q, want empty", got)
 	}
-	// A cancelled context aborts the docker call before it runs, standing in
+	// A cancelled context aborts the runtime call before it runs, standing in
 	// for any resolution failure (offline, local-only ref, buildx missing);
 	// the function must fall back to "" so imageTag keys on the ref alone.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if got := resolveBaseDigest(ctx, "ghcr.io/example/runner:latest"); got != "" {
+	if got := resolveBaseDigest(ctx, ContainerRuntime{}, "ghcr.io/example/runner:latest"); got != "" {
 		t.Errorf("cancelled ctx: got %q, want empty", got)
 	}
 }
@@ -420,7 +420,7 @@ func TestLockForTag_sameTagSameMutex(t *testing.T) {
 
 func TestEnsureImage_defaultReturnsRunnerImage(t *testing.T) {
 	var emitted int
-	img, err := Profile{}.EnsureImage(context.Background(), "", "default-runner:latest", func(Event) { emitted++ })
+	img, err := Profile{}.EnsureImage(context.Background(), ContainerRuntime{}, "", "default-runner:latest", func(Event) { emitted++ })
 	if err != nil {
 		t.Fatalf("default profile: %v", err)
 	}
@@ -434,7 +434,7 @@ func TestEnsureImage_defaultReturnsRunnerImage(t *testing.T) {
 
 func TestEnsureImage_noProfilesDir(t *testing.T) {
 	var emitted int
-	_, err := Profile{Name: "php"}.EnsureImage(context.Background(), "", "default:latest", func(Event) { emitted++ })
+	_, err := Profile{Name: "php"}.EnsureImage(context.Background(), ContainerRuntime{}, "", "default:latest", func(Event) { emitted++ })
 	if err == nil {
 		t.Fatal("expected ErrNoProfilesDir, got nil")
 	}
@@ -446,7 +446,7 @@ func TestEnsureImage_noProfilesDir(t *testing.T) {
 func TestEnsureImage_missingDockerfile(t *testing.T) {
 	dir := t.TempDir()
 	var emitted int
-	_, err := Profile{Name: "php"}.EnsureImage(context.Background(), dir, "default:latest", func(Event) { emitted++ })
+	_, err := Profile{Name: "php"}.EnsureImage(context.Background(), ContainerRuntime{}, dir, "default:latest", func(Event) { emitted++ })
 	if err == nil {
 		t.Fatal("expected error for missing dockerfile, got nil")
 	}

@@ -1,6 +1,6 @@
 # Scrutineer threat model
 
-Last reviewed April 2026 against commit 764b6f1. Covers the Go binary, the embedded web UI, the worker pipeline, the data directory, and the Docker image.
+Last reviewed June 2026. Covers the Go binary, the embedded web UI, the worker pipeline, the data directory, and the container runner image. The per-scan runner shells out to a container runtime (docker or rootless podman); rootless podman is recommended because its runtime access is not host-root-equivalent (see T12).
 
 ## What the system is
 
@@ -48,7 +48,7 @@ Four boundaries get crossed:
 1. Browser to `:8080`. No authentication. Host header must be `127.0.0.1`/`localhost`/`[::1]` (enforced by `securityHeaders` middleware). POST requests with `Sec-Fetch-Site: cross-site` are rejected. The `scanstate` cookie is `SameSite=Strict`.
 2. Worker to forge. `git clone` of an operator-supplied URL. Only `https://` scheme is accepted (`validateGitURL`). `--` separates flags from the URL. `GIT_PROTOCOL_FROM_USER=0` blocks `ext::` and similar.
 3. Worker to checkout. Analysis tools execute with the cloned repository as input. The repository content is attacker-controlled.
-4. Container to host. Docker's default isolation: shared kernel, whatever capabilities the runtime grants the non-root user, and any volumes the operator mounts.
+4. Container to host. The container runtime's default isolation: shared kernel, whatever capabilities the runtime grants the non-root user, and any volumes the operator mounts. Under rootless podman the runner runs in a user namespace where container root maps to an unprivileged host sub-uid, so this boundary is materially stronger than rootful docker.
 
 Boundary 3 is where the design currently leaks worst.
 
@@ -140,17 +140,17 @@ Run scrutineer as a host process (not containerised) and let it exec `docker run
 
 Keep scrutineer containerised but talk to a separate spawner daemon over a unix socket or localhost HTTP. The spawner accepts only `{repo_id, job_kind, model}` and constructs the `docker run` itself with hardcoded mounts and flags. Compromised scrutineer can request scans but cannot specify arbitrary mounts.
 
-Use a rootless runtime (rootless podman, sysbox, gVisor) for the child containers so socket access is not host-root-equivalent.
+Use a rootless runtime for the child containers so runtime access is not host-root-equivalent. **Implemented:** scrutineer runs as a host process and execs the runtime directly (no socket crosses a boundary), and `--runtime podman` selects rootless podman, where the child container runs in a user namespace whose root maps to an unprivileged host sub-uid (`--userns=keep-id` keeps scan output owned by the invoking user). sysbox and gVisor remain options for stronger kernel isolation.
 
 Whichever shape lands, the runner spec should be fixed in code: image digest, an egress-filtered network, `--read-only`, `--cap-drop ALL`, no access to `/data/scrutineer.db` or other repo workspaces, `ANTHROPIC_API_KEY` passed per-invocation or via a localhost proxy rather than ambient. The worker should never forward caller-supplied strings into mount paths or image names.
 
 ### T13: Runner egress (cooperative, partially mitigated)
 
-The docker runner no longer uses `--network none`; the container is on the default bridge so claude can reach `api.anthropic.com`. Egress is constrained by an allowlisting CONNECT/forward proxy that scrutineer runs on the host: `HTTPS_PROXY`/`HTTP_PROXY` in the container point at it, and the proxy 403s anything off the list (Anthropic, ecosyste.ms, forges, registries, advisory sources, the local skill API). The proxy listens on all interfaces so the docker bridge can reach it on Linux; a per-process random token in `Proxy-Authorization` stops it being an open relay, and the `host.docker.internal` → `127.0.0.1` rewrite is gated behind the same token so the loopback-bound web UI is not exposed to the LAN.
+The container runner no longer uses `--network none`; the container is on the runtime's default network so claude can reach `api.anthropic.com`. Egress is constrained by an allowlisting CONNECT/forward proxy that scrutineer runs on the host: `HTTPS_PROXY`/`HTTP_PROXY` in the container point at it, and the proxy 403s anything off the list (Anthropic, ecosyste.ms, forges, registries, advisory sources, the local skill API). The proxy listens on all interfaces so the container can reach it via its gateway on Linux; a per-process random token in `Proxy-Authorization` stops it being an open relay, and the `host.docker.internal` → `127.0.0.1` rewrite is gated behind the same token so the loopback-bound web UI is not exposed to the LAN.
 
 Residual: this is policy by cooperation, not enforcement. A process inside the container that ignores the proxy environment can dial anything directly. Everything in the runner image is pinned and audited (T11), so the practical exposure is a hostile cloned repository convincing the model to run a raw-socket exfil, which the model's tool permissions already make awkward but do not prevent.
 
-`--hardened` (and `hardened: true` in the config) closes this residual under the strict sandbox profile. Each scan creates its own ephemeral `--internal` docker network (`scrutineer-hardened-<scan_id>`) and removes it when the scan finishes, which blocks all routes to external networks and prevents a hostile clone in one scan from probing or interfering with another concurrent scan. The container can still reach the host bridge gateway, so the proxy on the host remains the only path out. Hardened mode also strips the egress allowlist down to `*.anthropic.com` plus `host.docker.internal`, mounts the rootfs read-only, sets `no-new-privileges`, and refuses scans whose workspace footprint exceeds 2 GiB once the clone completes. The cap is a post-clone gate (it bounds what hardened mode will scan, not what can land on disk during the clone itself; OS-level disk quotas are the right tool for the latter). The default mode keeps the cooperative posture so bundled skills that hit ecosyste.ms / registries directly continue to work.
+`--hardened` (and `hardened: true` in the config) closes this residual under the strict sandbox profile. Each scan creates its own ephemeral `--internal` network (`scrutineer-hardened-<scan_id>`) and removes it when the scan finishes, which blocks all routes to external networks and prevents a hostile clone in one scan from probing or interfering with another concurrent scan. The container can still reach the host gateway, so the proxy on the host remains the only path out. Under rootless podman, where `--internal` behaviour depends on the network backend (pasta, slirp4netns, netavark), each hardened scan first proves with two throwaway probes that the network blocks a literal-IP egress attempt yet still reaches the host proxy, and refuses the scan otherwise — so podman never runs a weaker sandbox than the flag promises. Hardened mode also strips the egress allowlist down to `*.anthropic.com` plus `host.docker.internal`, mounts the rootfs read-only, sets `no-new-privileges`, and refuses scans whose workspace footprint exceeds 2 GiB once the clone completes. The cap is a post-clone gate (it bounds what hardened mode will scan, not what can land on disk during the clone itself; OS-level disk quotas are the right tool for the latter). The default mode keeps the cooperative posture so bundled skills that hit ecosyste.ms / registries directly continue to work.
 
 Seccomp is left at Docker's default profile intentionally. The default already blocks roughly 40 syscalls including the common escape primitives (`keyctl`, `add_key`, `bpf`, `clone3` with namespaces, `kexec_load`, `unshare` with CLONE_NEWUSER, ptrace against other PIDs); combined with `--cap-drop ALL`, `no-new-privileges`, the read-only rootfs, and the non-root container user, a custom profile would add little for the threats hardened mode is designed against. Tightening to a stricter profile (e.g. drop `mount`, `pivot_root`, `chroot`) is a future option if a specific exploit class becomes a concern.
 
@@ -181,7 +181,7 @@ GORM usage is consistently parameterised; no `Raw`, no string-built `Where`, and
 - [x] Pin tool versions in Dockerfile: claude-code, semgrep, git-pkgs, brief, zizmor (T11).
 - [x] Non-root `USER runner` in Dockerfile (T11).
 - [x] Trim final Docker stage: `npm` absent, `pip` scoped to the `/opt/semgrep` venv, `curl` retained for build- and scan-time fetches (T11).
-- [ ] Per-job ephemeral runner (T1). See T12 before reaching for the Docker socket.
+- [x] Per-job ephemeral runner (T1): scrutineer execs the runtime directly (no socket), with `--runtime podman` for a rootless, non-root-equivalent child (T12).
 - [ ] URL allowlist at enqueue time; block RFC1918 redirects in HTTP client (T4).
 - [ ] Finding provenance tagging: source job on each finding row (T5).
 - [ ] Clone size and time caps (T9).

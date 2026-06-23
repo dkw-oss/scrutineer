@@ -209,18 +209,30 @@ Or with a Claude Code OAuth token instead of an API key:
 
 Always bind to `127.0.0.1`. The UI has no authentication; binding to `0.0.0.0` exposes your findings database to anyone on the network.
 
-If docker is available on the host, scrutineer runs each scan in an ephemeral container for isolation. The runner image is published to GHCR as a multi-arch manifest (`linux/amd64` and `linux/arm64`) and pulled automatically on first use:
+If a container runtime (docker or rootless podman) is available on the host, scrutineer runs each scan in an ephemeral container for isolation. The runner image is published to GHCR as a multi-arch manifest (`linux/amd64` and `linux/arm64`) and pulled automatically on first use:
 
     go run ./cmd/scrutineer -skills ./skills
 
-Use `--no-docker` to disable containerised execution, or `--runner-image` to specify a different image. To build the runner locally instead of pulling from GHCR:
+Use `--runtime podman` to run scans under podman instead of docker (see [Podman (rootless)](#podman-rootless) below), `--no-docker` to disable containerised execution entirely, or `--runner-image` to specify a different image. To build the runner locally instead of pulling from GHCR:
 
     docker build -t scrutineer-runner -f Dockerfile.runner .
     go run ./cmd/scrutineer -skills ./skills --runner-image scrutineer-runner
 
-When the docker runner is active, scrutineer starts an authenticated egress proxy on the host and points `HTTPS_PROXY`/`HTTP_PROXY` inside the container at it. The proxy only tunnels to an allowlist of hosts: the Anthropic API, `*.ecosyste.ms`, the major forges (GitHub, GitLab, Codeberg, Bitbucket), common package registries (npm, PyPI, RubyGems, crates.io, Go module proxy, Packagist, Hex, NuGet), advisory sources (semgrep.dev, OSV, NVD, cwe.mitre.org), and `host.docker.internal` for the local skill API. Requests to anything else get a 403 and are logged. Extend the list with `egress_allow` in the config file. When `-anthropic-base-url` is set (or falls back to the `ANTHROPIC_BASE_URL` env var), its hostname is automatically added to the allowlist. The proxy uses a per-process random token so it isn't an open relay; tools that ignore the proxy env are not blocked at the network layer (see `threatmodel.md`).
+When the container runner is active, scrutineer starts an authenticated egress proxy on the host and points `HTTPS_PROXY`/`HTTP_PROXY` inside the container at it. The proxy only tunnels to an allowlist of hosts: the Anthropic API, `*.ecosyste.ms`, the major forges (GitHub, GitLab, Codeberg, Bitbucket), common package registries (npm, PyPI, RubyGems, crates.io, Go module proxy, Packagist, Hex, NuGet), advisory sources (semgrep.dev, OSV, NVD, cwe.mitre.org), and `host.docker.internal` for the local skill API. Requests to anything else get a 403 and are logged. Extend the list with `egress_allow` in the config file. When `-anthropic-base-url` is set (or falls back to the `ANTHROPIC_BASE_URL` env var), its hostname is automatically added to the allowlist. The proxy uses a per-process random token so it isn't an open relay; tools that ignore the proxy env are not blocked at the network layer (see `threatmodel.md`).
 
-For deployments that treat skill prompts as untrusted, pass `--hardened` (or `hardened: true` in the config). The flag forces the docker runner (`--no-docker` is rejected), trims the egress allowlist to `*.anthropic.com` plus the host skill API (so `egress_allow` is ignored, drop the flag if you need to widen it), mounts the container rootfs read-only with `no-new-privileges`, attaches each scan to its own ephemeral docker network created with `--internal` (removed when the scan ends) so a process that ignores `HTTPS_PROXY` has no route out and concurrent scans cannot reach each other, and refuses scans whose workspace footprint exceeds 2 GiB once the clone completes. The 2 GiB check is post-clone: it bounds what hardened mode will agree to scan, not what can land on disk during the clone itself; use OS-level disk quotas if you need a clone-time guarantee. Bundled skills that hit ecosyste.ms or a package registry directly will fail under hardened mode unless they route through the host skill API. Per-ecosystem runner profiles still apply, but profile images that need writable paths beyond `/work` and `/tmp` are incompatible.
+For deployments that treat skill prompts as untrusted, pass `--hardened` (or `hardened: true` in the config). The flag forces the container runner (`--no-docker` is rejected), trims the egress allowlist to `*.anthropic.com` plus the host skill API (so `egress_allow` is ignored, drop the flag if you need to widen it), mounts the container rootfs read-only with `no-new-privileges`, attaches each scan to its own ephemeral network created with `--internal` (removed when the scan ends) so a process that ignores `HTTPS_PROXY` has no route out and concurrent scans cannot reach each other, and refuses scans whose workspace footprint exceeds 2 GiB once the clone completes. The 2 GiB check is post-clone: it bounds what hardened mode will agree to scan, not what can land on disk during the clone itself; use OS-level disk quotas if you need a clone-time guarantee. Bundled skills that hit ecosyste.ms or a package registry directly will fail under hardened mode unless they route through the host skill API. Per-ecosystem runner profiles still apply, but profile images that need writable paths beyond `/work` and `/tmp` are incompatible. Under podman, each hardened scan first verifies its `--internal` network actually blocks external egress while still reaching the host proxy, and refuses the scan if that cannot be confirmed, so the sandbox never silently weakens.
+
+## Podman (rootless)
+
+Pass `--runtime podman` (or `runtime: podman` in the config) to run scans under podman instead of docker. Rootless podman is the recommended posture: because the runtime is not root-equivalent, a hostile repository that escapes the scan container lands as an unprivileged subordinate user rather than near-root on the host (see [threatmodel.md](threatmodel.md), T12). There is no auto-detection — a podman-only host must set `--runtime podman` explicitly; the default stays docker.
+
+Requirements:
+
+- **podman ≥ 4.7** — scrutineer reaches the host egress proxy via `--add-host host.docker.internal:host-gateway`, which older podman does not support. Startup logs a warning if the detected version looks too old.
+- **`/etc/subuid` + `/etc/subgid`** — rootless podman maps the container user back to your host user with `--userns=keep-id` so scan output and the resumable session store stay host-owned. Your user needs a sub-id range (the usual `useradd` default provides one; run `podman system migrate` after changing it). Scrutineer runs a one-off keep-id smoke test at startup and fails fast with a hint if this is misconfigured.
+- **`skopeo` (optional)** — used in place of `docker buildx` to notice when a moved `:latest` runner tag should rebuild per-ecosystem profile images. Without it, profiles still build but key their cache on the image ref alone.
+
+`--hardened` is supported under rootless podman and is verified fail-closed per scan (see the hardened-mode paragraph above). See [docs/podman.md](docs/podman.md) for the runtime's full security model and known gaps.
 
 ## Flags
 
@@ -232,9 +244,10 @@ For deployments that treat skill prompts as untrusted, pass `--hardened` (or `ha
 | `-effort` | `high` | Claude effort level |
 | `-skills` | - | Local directory to load SKILL.md files from (repeatable) |
 | `-skills-repo` | - | `owner/repo[@ref]` or git HTTPS URL `https://host/path[@ref]` to clone skills from on startup; `@ref` pins a branch, tag or commit and the resolved SHA is recorded on every scan |
+| `--runtime` | `docker` | Container runtime: `docker` or `podman` (rootless podman supported) |
 | `--no-docker` | false | Disable containerised runner |
-| `--hardened` | false | Strict sandbox: docker required, egress restricted to `*.anthropic.com` + host skill API, read-only rootfs, internal docker network |
-| `--runner-image` | `ghcr.io/alpha-omega-security/scrutineer-runner:latest` | Docker image for per-scan containers |
+| `--hardened` | false | Strict sandbox: container runtime required, egress restricted to `*.anthropic.com` + host skill API, read-only rootfs, internal network |
+| `--runner-image` | `ghcr.io/alpha-omega-security/scrutineer-runner:latest` | Container image for per-scan containers |
 | `-concurrency` | `4` | Number of scans to run in parallel |
 | `-clone` | `shallow` | Clone depth: `shallow` (`--depth 1`) or `full` |
 | `-scan-timeout` | `1h` | Wall-clock limit per scan; exceeded scans fail |
@@ -278,6 +291,7 @@ See [SECURITY.md](SECURITY.md) for the reporting policy and [threatmodel.md](thr
 - [docs/backup.md](docs/backup.md) -- backing up and restoring the database (built-in `scrutineer backup`/`restore`, `sqlite3`, Litestream)
 - [docs/development.md](docs/development.md) -- project layout, regenerating embedded data, running tests
 - [docs/encrypted-sharing.md](docs/encrypted-sharing.md) -- encrypted findings sharing between contributors (age + SSH keys, team keyring management)
+- [docs/podman.md](docs/podman.md) -- security model and known gaps for the podman / rootless runtime (sandbox isolation, hardened-mode verification)
 
 ## License
 

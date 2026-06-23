@@ -45,10 +45,10 @@ type SkillRunner interface {
 type SkillJob struct {
 	Repo db.Repository
 	// ScanID identifies the scan that owns this job. Required when the
-	// runner is hardened: it disambiguates the per-scan docker network so
+	// runner is hardened: it disambiguates the per-scan network so
 	// concurrent scans can never share one. A zero value collapses
 	// distinct scans onto a single network and defeats the isolation, so
-	// the docker runner refuses to start hardened with ScanID == 0.
+	// the container runner refuses to start hardened with ScanID == 0.
 	ScanID       uint
 	WorkRoot     string
 	Model        string
@@ -66,7 +66,7 @@ type SkillJob struct {
 	SrcReady bool
 	// Profile names a runner profile (docker/profiles/<name>/). Empty
 	// means "auto-detect from the clone"; "default" forces the default
-	// runner image. Only the docker runner honours this; the local
+	// runner image. Only the container runner honours this; the local
 	// runner ignores it (no per-profile image to swap to).
 	Profile string
 	// RequiresProfile pins the skill to a named profile. When set, the
@@ -82,7 +82,7 @@ type SkillJob struct {
 	// prompt. It lets callers resume the same conversation with targeted
 	// corrective instructions, such as rewriting an invalid report.json.
 	ResumePrompt string
-	// ClaudeConfigDir is a host directory the docker runner mounts as the
+	// ClaudeConfigDir is a host directory the container runner mounts as the
 	// container's CLAUDE_CONFIG_DIR so the resumable session store persists
 	// across container restarts. Empty disables the mount (the local runner
 	// ignores it and relies on the host's own ~/.claude).

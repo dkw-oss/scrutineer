@@ -110,9 +110,9 @@ type Server struct {
 	skillNamesCache []string
 	skillNamesTTL   time.Time
 
-	// toolMeta caches the scanner-tool and docker versions shown on the
-	// settings page. Gathering them shells out to docker, so it is cached
-	// behind a TTL to keep the page DB-fast on repeat loads.
+	// toolMeta caches the scanner-tool and container runtime versions shown on
+	// the settings page. Gathering them shells out to the runtime, so it is
+	// cached behind a TTL to keep the page DB-fast on repeat loads.
 	toolMetaMu    sync.Mutex
 	toolMetaCache toolMetadata
 	toolMetaTTL   time.Time
