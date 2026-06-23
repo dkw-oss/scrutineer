@@ -35,6 +35,10 @@ jobs:
             ${{ runner.os }}-go-${{ github.job }}-
       - run: go vet ./...
       - run: go test -race ./...
+      # The podman integration tests are behind //go:build podman and are not
+      # built by the steps above; vet them under the tag so they can't silently
+      # rot (podman itself is not needed -- the tests skip at run time without it).
+      - run: go vet -tags podman ./...
 
   lint:
     name: lint

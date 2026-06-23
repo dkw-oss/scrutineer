@@ -85,9 +85,15 @@ These are **not** addressed by the podman / rootless runtime and remain open:
    operator *that are reachable through the bind mounts*. Far better than
    rootful, but not zero — run scrutineer as a dedicated low-privilege user.
 3. **Host-gateway reachability is environment-dependent.** On some rootless
-   network configurations the container may not reach a host-bound proxy.
-   Hardened mode then correctly *refuses* (a denial of function, not a hole);
-   default mode simply loses egress. Not auto-remediated.
+   network configurations (or podman < 4.7) the container may not reach the
+   host egress proxy. This fails safe, not open: hardened mode *refuses* the
+   scan (its proxy is the enforcement boundary), and default mode surfaces it
+   as scans failing with network errors — a loud functional failure, not a
+   silent security downgrade, because the default-mode proxy is cooperative
+   (gap #1), not an enforcement boundary. scrutineer logs a startup warning
+   when it cannot resolve the host-gateway under podman; the fix is podman
+   >= 4.7 and a working rootless network backend. Not auto-remediated beyond
+   the warning.
 4. **podman < 4.7 is warned, not gated.** `--add-host …:host-gateway` is
    unsupported below 4.7, so egress breaks; startup logs a warning (hardened
    additionally catches it via verification) but does not block.

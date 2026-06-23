@@ -213,7 +213,7 @@ If a container runtime (docker or rootless podman) is available on the host, scr
 
     go run ./cmd/scrutineer -skills ./skills
 
-Use `--runtime podman` to run scans under podman instead of docker (see [Podman (rootless)](#podman-rootless) below), `--no-docker` to disable containerised execution entirely, or `--runner-image` to specify a different image. To build the runner locally instead of pulling from GHCR:
+Use `--runtime podman` to run scans under podman instead of docker (see [Podman (rootless)](#podman-rootless) below), `--no-docker` to disable containerised execution entirely, or `--runner-image` to specify a different image. To build the runner locally instead of pulling from GHCR (use `podman build` instead if you run scans under podman):
 
     docker build -t scrutineer-runner -f Dockerfile.runner .
     go run ./cmd/scrutineer -skills ./skills --runner-image scrutineer-runner
@@ -228,11 +228,13 @@ Pass `--runtime podman` (or `runtime: podman` in the config) to run scans under 
 
 Requirements:
 
-- **podman ≥ 4.7** — scrutineer reaches the host egress proxy via `--add-host host.docker.internal:host-gateway`, which older podman does not support. Startup logs a warning if the detected version looks too old.
+- **podman ≥ 4.7** — scrutineer reaches the host egress proxy via `--add-host host.docker.internal:host-gateway`, which older podman does not support; without it, scans fail with network errors. Startup logs a warning if the detected version looks too old or if the host-gateway address can't be resolved.
 - **`/etc/subuid` + `/etc/subgid`** — rootless podman maps the container user back to your host user with `--userns=keep-id` so scan output and the resumable session store stay host-owned. Your user needs a sub-id range (the usual `useradd` default provides one; run `podman system migrate` after changing it). Scrutineer runs a one-off keep-id smoke test at startup and fails fast with a hint if this is misconfigured.
 - **`skopeo` (optional)** — used in place of `docker buildx` to notice when a moved `:latest` runner tag should rebuild per-ecosystem profile images. Without it, profiles still build but key their cache on the image ref alone.
 
 `--hardened` is supported under rootless podman and is verified fail-closed per scan (see the hardened-mode paragraph above). See [docs/podman.md](docs/podman.md) for the runtime's full security model and known gaps.
+
+The `docker build` / `docker run` commands shown in this repo -- for the runner image and the per-ecosystem profile images under `docker/profiles/` -- are CLI-compatible with podman; substitute `podman` for `docker`.
 
 ## Flags
 

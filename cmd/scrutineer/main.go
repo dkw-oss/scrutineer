@@ -546,6 +546,15 @@ func setupRunner(f *flags, cfg *config.Config, log *slog.Logger) (worker.SkillRu
 		}
 	} else {
 		gwIP = worker.ResolveHostGatewayIPv4(rt, f.runnerImage, "")
+		if rt.Bin == "podman" && gwIP == "" {
+			// Reuses the resolve probe just run (no extra launch). An empty
+			// result means host-gateway is not wired, so containers cannot reach
+			// the host egress proxy and scans will fail with network errors --
+			// surface the likely cause now rather than once per scan.
+			log.Warn("host-gateway did not resolve under podman; scans may fail to " +
+				"reach the network because the container cannot reach the host egress " +
+				"proxy (needs podman >= 4.7; see docs/podman.md)")
+		}
 	}
 	log.Info("container runtime detected, using containerised runner",
 		"runtime", rt.Bin, "rootless", rt.Rootless, "image", f.runnerImage,
