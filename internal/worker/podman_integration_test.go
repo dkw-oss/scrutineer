@@ -164,12 +164,13 @@ func TestIntegration_VerifyHardenedNetwork(t *testing.T) {
 	}
 	defer func() { _ = exec.Command(rt.bin(), "network", "rm", "--", netName).Run() }()
 
-	if ResolveHostGatewayIPv4(rt, image, netName) == "" {
+	gwIP := ResolveHostGatewayIPv4(rt, image, netName)
+	if gwIP == "" {
 		t.Skip("host-gateway unresolved on this network; cannot test proxy reachability")
 	}
 
 	d := DockerRunner{Runtime: rt, Hardened: true, ProxyURL: ProxyURL(token, port)}
-	if err := d.verifyHardenedNetwork(netName, image); err != nil {
+	if err := d.verifyHardenedNetwork(hardenedNet{name: netName, gatewayIP: gwIP}, image); err != nil {
 		t.Fatalf("verifyHardenedNetwork on a correct internal network: %v", err)
 	}
 }

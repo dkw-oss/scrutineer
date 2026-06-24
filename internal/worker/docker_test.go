@@ -14,7 +14,7 @@ import (
 func TestBuildDockerArgs_ClaudeConfigMount(t *testing.T) {
 	d := DockerRunner{}
 
-	with := d.buildDockerArgs("/work/abs", "img:latest", "", "/data/claude-config/scan-7")
+	with := d.buildDockerArgs("/work/abs", "img:latest", hardenedNet{}, "/data/claude-config/scan-7")
 	if !hasAdjacent(with, "-v", "/data/claude-config/scan-7:/claude-config") {
 		t.Errorf("expected the config dir bind mount in %v", with)
 	}
@@ -23,7 +23,7 @@ func TestBuildDockerArgs_ClaudeConfigMount(t *testing.T) {
 	}
 
 	// No config dir → no mount and no env, so default scans are unchanged.
-	without := d.buildDockerArgs("/work/abs", "img:latest", "", "")
+	without := d.buildDockerArgs("/work/abs", "img:latest", hardenedNet{}, "")
 	for _, a := range without {
 		if strings.Contains(a, "/claude-config") || strings.HasPrefix(a, "CLAUDE_CONFIG_DIR=") {
 			t.Errorf("did not expect any claude-config args, got %q in %v", a, without)
@@ -37,7 +37,7 @@ func TestBuildDockerArgs_KeepIDGating(t *testing.T) {
 	// byte as before (no --userns token at all), so this also guards against a
 	// regression that would silently alter the docker arg vector.
 	rootless := DockerRunner{Runtime: ContainerRuntime{Bin: "podman", Rootless: true}}
-	if got := rootless.buildDockerArgs("/work/abs", "img:latest", "", ""); !slices.Contains(got, "--userns=keep-id") {
+	if got := rootless.buildDockerArgs("/work/abs", "img:latest", hardenedNet{}, ""); !slices.Contains(got, "--userns=keep-id") {
 		t.Errorf("rootless podman: expected --userns=keep-id in %v", got)
 	}
 
@@ -46,7 +46,7 @@ func TestBuildDockerArgs_KeepIDGating(t *testing.T) {
 		{Runtime: ContainerRuntime{Bin: "docker"}},
 		{Runtime: ContainerRuntime{Bin: "podman"}}, // rootful podman
 	} {
-		got := d.buildDockerArgs("/work/abs", "img:latest", "", "")
+		got := d.buildDockerArgs("/work/abs", "img:latest", hardenedNet{}, "")
 		for _, a := range got {
 			if strings.HasPrefix(a, "--userns") {
 				t.Errorf("runtime %+v: unexpected %q in %v", d.Runtime, a, got)
@@ -56,7 +56,7 @@ func TestBuildDockerArgs_KeepIDGating(t *testing.T) {
 
 	// Rootless podman with a resume config dir keeps BOTH the mount and keep-id
 	// so the persisted session store stays host-owned across container restarts.
-	withCfg := rootless.buildDockerArgs("/work/abs", "img:latest", "", "/data/cfg/scan-1")
+	withCfg := rootless.buildDockerArgs("/work/abs", "img:latest", hardenedNet{}, "/data/cfg/scan-1")
 	if !slices.Contains(withCfg, "--userns=keep-id") {
 		t.Errorf("rootless+config: expected --userns=keep-id in %v", withCfg)
 	}
@@ -69,7 +69,7 @@ func TestBuildDockerArgs_SELinuxRelabel(t *testing.T) {
 	// With relabeling on, every host bind mount must carry the ":z" shared
 	// relabel so the container can access it on an SELinux host.
 	on := DockerRunner{SELinuxRelabel: true}
-	got := on.buildDockerArgs("/work/abs", "img:latest", "", "/data/cfg/scan-1")
+	got := on.buildDockerArgs("/work/abs", "img:latest", hardenedNet{}, "/data/cfg/scan-1")
 	if !hasAdjacent(got, "-v", "/work/abs:/work:z") {
 		t.Errorf("expected /work mount relabeled with :z in %v", got)
 	}
@@ -80,7 +80,7 @@ func TestBuildDockerArgs_SELinuxRelabel(t *testing.T) {
 	// With relabeling off (the zero value / default), mounts are byte-for-byte
 	// unchanged -- no :z anywhere -- so non-SELinux hosts are unaffected.
 	off := DockerRunner{}
-	got = off.buildDockerArgs("/work/abs", "img:latest", "", "/data/cfg/scan-1")
+	got = off.buildDockerArgs("/work/abs", "img:latest", hardenedNet{}, "/data/cfg/scan-1")
 	if !hasAdjacent(got, "-v", "/work/abs:/work") {
 		t.Errorf("expected unrelabeled /work mount in %v", got)
 	}
@@ -104,7 +104,7 @@ func TestBuildDockerArgs_ContainerHardening(t *testing.T) {
 	// --hardened-rootless-runtime: read-only + no-new-privileges, but NOT the
 	// per-scan --internal network -- that network is the part rootless podman
 	// can't route to the host proxy, and is the whole reason this flag exists.
-	roR := DockerRunner{HardenedRootlessRuntime: true}.buildDockerArgs("/work/abs", "img:latest", net, "")
+	roR := DockerRunner{HardenedRootlessRuntime: true}.buildDockerArgs("/work/abs", "img:latest", hardenedNet{name: net}, "")
 	if !slices.Contains(roR, "--read-only") || !hasNoNewPrivs(roR) {
 		t.Errorf("hardened-rootless-runtime: expected --read-only + no-new-privileges in %v", roR)
 	}
@@ -113,7 +113,7 @@ func TestBuildDockerArgs_ContainerHardening(t *testing.T) {
 	}
 
 	// --hardened: the container hardening AND the per-scan network.
-	h := DockerRunner{Hardened: true}.buildDockerArgs("/work/abs", "img:latest", net, "")
+	h := DockerRunner{Hardened: true}.buildDockerArgs("/work/abs", "img:latest", hardenedNet{name: net}, "")
 	if !slices.Contains(h, "--read-only") || !hasNoNewPrivs(h) {
 		t.Errorf("hardened: expected --read-only + no-new-privileges in %v", h)
 	}
@@ -131,7 +131,7 @@ func TestBuildDockerArgs_ContainerHardening(t *testing.T) {
 	}
 
 	// Default mode: neither container-hardening option (byte-for-byte unchanged).
-	def := DockerRunner{}.buildDockerArgs("/work/abs", "img:latest", "", "")
+	def := DockerRunner{}.buildDockerArgs("/work/abs", "img:latest", hardenedNet{}, "")
 	if slices.Contains(def, "--read-only") || hasNoNewPrivs(def) {
 		t.Errorf("default mode must set neither --read-only nor no-new-privileges: %v", def)
 	}
@@ -139,7 +139,7 @@ func TestBuildDockerArgs_ContainerHardening(t *testing.T) {
 	// The baseline -- --cap-drop ALL, non-root --user, the /tmp tmpfs -- is
 	// present in EVERY mode; the new flag must not disturb that invariant.
 	for _, mode := range []DockerRunner{{}, {HardenedRootlessRuntime: true}, {Hardened: true}} {
-		args := mode.buildDockerArgs("/work/abs", "img:latest", net, "")
+		args := mode.buildDockerArgs("/work/abs", "img:latest", hardenedNet{name: net}, "")
 		if !hasAdjacent(args, "--cap-drop", "ALL") {
 			t.Errorf("%+v: missing --cap-drop ALL: %v", mode, args)
 		}

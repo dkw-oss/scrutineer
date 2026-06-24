@@ -147,7 +147,7 @@ func (d DockerRunner) RunSkill(ctx context.Context, sj SkillJob, emit func(Event
 	}
 	d.injectProfileGuide(profile, absWork, emit)
 
-	perScanNetwork, cleanupNetwork, err := d.setupHardenedNetwork(sj, image)
+	hnet, cleanupNetwork, err := d.setupHardenedNetwork(sj, image)
 	if err != nil {
 		return SkillResult{Commit: commit, Profile: profile}, err
 	}
@@ -168,7 +168,7 @@ func (d DockerRunner) RunSkill(ctx context.Context, sj SkillJob, emit func(Event
 			return SkillResult{Commit: commit, Profile: profile}, fmt.Errorf("create claude config dir: %w", err)
 		}
 	}
-	dockerBase := d.buildDockerArgs(absWork, image, perScanNetwork, absConfig)
+	dockerBase := d.buildDockerArgs(absWork, image, hnet, absConfig)
 
 	logLine := "$ " + d.Runtime.bin() + " run --rm " + image + " <skill:" + sj.Name + ">"
 	if d.AnthropicBaseURL != "" {
@@ -260,15 +260,15 @@ func (d DockerRunner) runDockerOnce(ctx context.Context, dockerBase []string, sj
 // the in-container command. Split out of RunSkill to keep its cognitive
 // complexity manageable as new toggles (hardened mode, proxy, profiles)
 // accumulate.
-func (d DockerRunner) buildDockerArgs(absWork, image, perScanNetwork, claudeConfigDir string) []string {
+func (d DockerRunner) buildDockerArgs(absWork, image string, hnet hardenedNet, claudeConfigDir string) []string {
 	gwTarget := "host-gateway"
 	if d.Hardened {
-		// Each --internal network has its own subnet and gateway, so the
-		// IPv4 must be probed against the per-scan network the runner
-		// will actually attach to. An empty probe result falls through
-		// to docker's literal host-gateway alias.
-		if ip := ResolveHostGatewayIPv4(d.Runtime, image, perScanNetwork); ip != "" {
-			gwTarget = ip
+		// setupHardenedNetwork resolved the gateway once against this per-scan
+		// network and passed it in (no re-probe here, so this stays a pure
+		// function). An empty result falls through to the literal host-gateway
+		// alias.
+		if hnet.gatewayIP != "" {
+			gwTarget = hnet.gatewayIP
 		}
 	} else if d.HostGatewayIP != "" {
 		gwTarget = d.HostGatewayIP
@@ -333,7 +333,7 @@ func (d DockerRunner) buildDockerArgs(absWork, image, perScanNetwork, claudeConf
 		// it does not work under rootless podman (the startup verification
 		// fails closed when it can't reach the host proxy here; see
 		// docs/podman.md). --hardened-rootless-runtime deliberately omits it.
-		args = append(args, "--network", perScanNetwork)
+		args = append(args, "--network", hnet.name)
 	}
 	if d.ProxyURL != "" {
 		args = append(args,
@@ -528,36 +528,50 @@ func EnsureHardenedNetwork(rt ContainerRuntime, name string) error {
 	return nil
 }
 
+// hardenedNet bundles a per-scan --internal network name with the host-gateway
+// IPv4 resolved against it. setupHardenedNetwork resolves the gateway once and
+// threads it through both verifyHardenedNetwork and buildDockerArgs, so a
+// hardened scan probes for it a single time instead of once per consumer. The
+// zero value (both fields "") is the non-hardened case.
+type hardenedNet struct {
+	name      string // per-scan --internal network name
+	gatewayIP string // host-gateway IPv4 for that network; "" if unresolved
+}
+
 // setupHardenedNetwork creates the per-scan --internal network for a hardened
-// scan and, on podman, verifies it actually isolates egress before the scan
-// runs (fail closed). It returns the network name (empty outside hardened mode)
-// and a cleanup func the caller must defer to remove the network. Outside
-// hardened mode it is a no-op with a no-op cleanup. On any error the network it
-// created (if any) is already torn down, so the returned cleanup is always safe
-// to defer.
-func (d DockerRunner) setupHardenedNetwork(sj SkillJob, image string) (string, func(), error) {
+// scan, resolves its host-gateway once, and (on rootless podman) verifies it
+// actually isolates egress before the scan runs (fail closed). It returns the
+// network + resolved gateway and a cleanup func the caller must defer to remove
+// the network. Outside hardened mode it is a no-op with a zero hardenedNet and a
+// no-op cleanup. On any error the network it created (if any) is already torn
+// down, so the returned cleanup is always safe to defer.
+func (d DockerRunner) setupHardenedNetwork(sj SkillJob, image string) (hardenedNet, func(), error) {
 	noop := func() {}
 	if !d.Hardened {
-		return "", noop, nil
+		return hardenedNet{}, noop, nil
 	}
 	if sj.ScanID == 0 {
-		return "", noop, fmt.Errorf("hardened mode requires SkillJob.ScanID; refusing to share %s0 across scans", hardenedNetworkPrefix)
+		return hardenedNet{}, noop, fmt.Errorf("hardened mode requires SkillJob.ScanID; refusing to share %s0 across scans", hardenedNetworkPrefix)
 	}
 	network := hardenedNetworkName(sj.ScanID)
 	if err := EnsureHardenedNetwork(d.Runtime, network); err != nil {
-		return "", noop, fmt.Errorf("create hardened network: %w", err)
+		return hardenedNet{}, noop, fmt.Errorf("create hardened network: %w", err)
 	}
 	cleanup := func() { _ = exec.Command(d.Runtime.bin(), "network", "rm", "--", network).Run() }
+	// Resolve the host-gateway once against the network just created; reused by
+	// both the verification probe and the real run (an empty result falls through
+	// to the literal host-gateway alias downstream).
+	hn := hardenedNet{name: network, gatewayIP: ResolveHostGatewayIPv4(d.Runtime, image, network)}
 	// docker's bridge --internal is trusted, and so is rootful podman's (netavark
 	// + a bridge in the host netns, gateway on the host -- docker's model). Only
 	// rootless podman needs per-scan proof; see needsHardenedNetVerify.
 	if d.Runtime.needsHardenedNetVerify() {
-		if err := d.verifyHardenedNetwork(network, image); err != nil {
+		if err := d.verifyHardenedNetwork(hn, image); err != nil {
 			cleanup()
-			return "", noop, fmt.Errorf("hardened network verification: %w", err)
+			return hardenedNet{}, noop, fmt.Errorf("hardened network verification: %w", err)
 		}
 	}
-	return network, cleanup, nil
+	return hn, cleanup, nil
 }
 
 // verifyHardenedNetwork fails closed when the per-scan --internal network does
@@ -573,10 +587,11 @@ func (d DockerRunner) setupHardenedNetwork(sj SkillJob, image string) (string, f
 //
 // Any probe that cannot even run (image won't start, curl missing) is treated
 // as a failure: the runner must never fall back to a weaker sandbox silently.
-func (d DockerRunner) verifyHardenedNetwork(network, image string) error {
+func (d DockerRunner) verifyHardenedNetwork(hn hardenedNet, image string) error {
+	network := hn.name
 	gwTarget := "host-gateway"
-	if ip := ResolveHostGatewayIPv4(d.Runtime, image, network); ip != "" {
-		gwTarget = ip
+	if hn.gatewayIP != "" {
+		gwTarget = hn.gatewayIP
 	}
 	port, err := proxyPortFromURL(d.ProxyURL)
 	if err != nil {
