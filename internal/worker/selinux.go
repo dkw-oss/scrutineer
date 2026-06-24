@@ -65,6 +65,30 @@ func HostSELinuxEnabled() bool {
 	return err == nil
 }
 
+// SELinux host modes reported by HostSELinuxState (distinct from the
+// auto/on/off relabel switch above).
+const (
+	SELinuxStateEnforcing  = "enforcing"
+	SELinuxStatePermissive = "permissive"
+	SELinuxStateDisabled   = "disabled"
+)
+
+// HostSELinuxState reports the host's SELinux mode for the startup diagnostic,
+// reading the selinuxfs status node: "enforcing" (enforce==1) or "permissive"
+// (enforce==0) when SELinux is enabled, "disabled" when selinuxfs is not mounted
+// (the node is absent or unreadable). The human-readable companion to
+// HostSELinuxEnabled, which it agrees with (disabled iff not enabled).
+func HostSELinuxState() string {
+	b, err := os.ReadFile(selinuxfsEnforcePath)
+	if err != nil {
+		return SELinuxStateDisabled
+	}
+	if strings.TrimSpace(string(b)) == "1" {
+		return SELinuxStateEnforcing
+	}
+	return SELinuxStatePermissive
+}
+
 // ResolveSELinuxRelabel turns the --selinux switch into the concrete decision of
 // whether to add the ":z" relabel option to runner bind mounts. See the mode
 // constants for each value; "auto" (and the empty string) consult

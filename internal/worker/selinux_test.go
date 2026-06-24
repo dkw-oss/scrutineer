@@ -45,6 +45,20 @@ func TestResolveSELinuxRelabel(t *testing.T) {
 	}
 }
 
+func TestHostSELinuxState(t *testing.T) {
+	switch s := HostSELinuxState(); s {
+	case SELinuxStateEnforcing, SELinuxStatePermissive, SELinuxStateDisabled:
+		// ok
+	default:
+		t.Errorf("HostSELinuxState() = %q, want enforcing/permissive/disabled", s)
+	}
+	// State and HostSELinuxEnabled must agree: "disabled" iff not enabled.
+	if (HostSELinuxState() == SELinuxStateDisabled) == HostSELinuxEnabled() {
+		t.Errorf("HostSELinuxState()=%q disagrees with HostSELinuxEnabled()=%v",
+			HostSELinuxState(), HostSELinuxEnabled())
+	}
+}
+
 func TestVerifySELinuxMount_NoopCases(t *testing.T) {
 	// relabel=false is the operator opting out: the check must never launch a
 	// container or error, even with no runtime present.

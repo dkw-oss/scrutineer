@@ -306,6 +306,13 @@ func run(log *slog.Logger) error {
 	if err := validateFlags(f); err != nil {
 		return err
 	}
+	// When --selinux is given explicitly, surface the host's SELinux mode at
+	// startup so the operator can confirm what scrutineer detected (e.g. that an
+	// enforcing host will get the :z relabel, or that --selinux=off on an
+	// enforcing host is about to break file passing).
+	if f.set["selinux"] {
+		log.Info("selinux", "flag", f.selinux, "state", worker.HostSELinuxState())
+	}
 	if key := os.Getenv("ANTHROPIC_API_KEY"); strings.HasPrefix(key, "sk-ant-oat") {
 		log.Warn("ANTHROPIC_API_KEY looks like an OAuth token from `claude setup-token`; set it as CLAUDE_CODE_OAUTH_TOKEN instead")
 	}
