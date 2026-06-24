@@ -36,6 +36,12 @@ type Config struct {
 	// host-owned. There is no auto-detection: a podman-only host must set this
 	// (or pass --runtime podman) explicitly.
 	Runtime string `yaml:"runtime"`
+	// SELinux controls bind-mount relabeling for the container runner: "auto"
+	// (default/empty -- relabel only when SELinux is detected on the host), "on"
+	// (always), or "off" (never). On an SELinux-enabled host the runner must
+	// relabel its bind mounts (":z") or the container cannot read the clone or
+	// write its output. Non-SELinux hosts are unaffected. See docs/podman.md.
+	SELinux string `yaml:"selinux"`
 	// Hardened enforces the strictest sandbox mode: a container runtime is
 	// required (no --no-docker fallback), egress is restricted to
 	// *.anthropic.com plus host.docker.internal, the container rootfs is
@@ -132,6 +138,17 @@ func ValidateRuntime(s string) error {
 	}
 }
 
+// ValidateSELinux returns an error when s is not one of "", "auto", "on", or
+// "off". Exposed so the CLI flag can use the same rule as the YAML field.
+func ValidateSELinux(s string) error {
+	switch s {
+	case "", "auto", "on", "off":
+		return nil
+	default:
+		return fmt.Errorf("selinux: must be \"auto\", \"on\", or \"off\", got %q", s)
+	}
+}
+
 // Model is a display-name plus the claude model id it resolves to. The
 // shape matches web.Model so main.go can pipe one into the other without
 // the two packages depending on each other.
@@ -190,6 +207,9 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	if err := ValidateRuntime(c.Runtime); err != nil {
+		return nil, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	if err := ValidateSELinux(c.SELinux); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	if _, err := ParseScanTimeout(c.ScanTimeout); err != nil {

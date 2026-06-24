@@ -42,6 +42,15 @@
 # auto-detection -- a podman-only host must set this explicitly.
 # runtime: docker
 
+# SELinux bind-mount relabeling for the container runner. "auto" (default) adds
+# ":z" to the runner's bind mounts only when SELinux is detected on the host
+# (the Fedora/RHEL/Rocky/Alma default), so the container can read the clone and
+# write its output; without it every scan fails with permission errors on such
+# hosts. "on" forces it; "off" disables it (set this if you pre-label the data
+# dir yourself). Non-SELinux hosts are unaffected either way. A startup smoke
+# test verifies a real relabeled mount works. See docs/podman.md.
+# selinux: auto
+
 # Disable the container runner even if a runtime is available on the host.
 # no_docker: false
 

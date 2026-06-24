@@ -67,11 +67,13 @@ func TestIntegration_KeepIDOwnership(t *testing.T) {
 	image := pullOrSkip(t, rt, alpineImage)
 	work := t.TempDir()
 
-	// Mirror the --user + --userns=keep-id flags the real runner adds.
+	// Mirror the --user + --userns=keep-id flags the real runner adds, plus the
+	// SELinux relabel (":z") it adds on an SELinux host -- without it this would
+	// fail for a MAC reason on enforcing hosts rather than testing keep-id.
 	args := []string{
 		"run", "--rm", "--userns=keep-id",
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
-		"-v", work + ":/work", "-w", "/work",
+		"-v", bindMount(work, "/work", HostSELinuxEnabled()), "-w", "/work",
 		"--entrypoint", "sh", "--", image, "-c", "touch /work/out",
 	}
 	if out, err := exec.Command(rt.bin(), args...).CombinedOutput(); err != nil {
@@ -87,6 +89,21 @@ func TestIntegration_KeepIDOwnership(t *testing.T) {
 	}
 	if int(st.Uid) != os.Getuid() {
 		t.Errorf("bind-mount output owned by uid %d, want host uid %d (keep-id not applied?)", st.Uid, os.Getuid())
+	}
+}
+
+// TestIntegration_SELinuxBindMount exercises the relabeled-mount smoke test on a
+// real podman. On an SELinux-enabled host it proves the ":z" relabel actually
+// lets the container read a host-seeded file and write output the host reads
+// back; on a non-SELinux host VerifySELinuxMount is a no-op, so the test skips.
+func TestIntegration_SELinuxBindMount(t *testing.T) {
+	rt := podmanOrSkip(t)
+	if !HostSELinuxEnabled() {
+		t.Skip("SELinux not enabled on host; nothing to verify")
+	}
+	image := pullOrSkip(t, rt, alpineImage)
+	if err := VerifySELinuxMount(context.Background(), rt, image, true); err != nil {
+		t.Fatalf("VerifySELinuxMount on a relabeled mount: %v", err)
 	}
 }
 

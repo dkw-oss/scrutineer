@@ -263,8 +263,10 @@ func fileContains(path, needle string) bool {
 // DetectProfile runs `brief` against the cloned source inside the
 // default runner image (which already ships brief) and returns the
 // matching profile. Falls back to the zero profile on any error so a
-// detection blip never blocks a scan.
-func DetectProfile(ctx context.Context, rt ContainerRuntime, runnerImage, srcDir string) Profile {
+// detection blip never blocks a scan. relabel mirrors the runner's
+// --selinux setting so the read-only /src mount is relabeled (":ro,z")
+// on an SELinux host, just like the real scan's /work mount.
+func DetectProfile(ctx context.Context, rt ContainerRuntime, runnerImage, srcDir string, relabel bool) Profile {
 	absSrc, err := filepath.Abs(srcDir)
 	if err != nil {
 		return Profile{}
@@ -272,7 +274,7 @@ func DetectProfile(ctx context.Context, rt ContainerRuntime, runnerImage, srcDir
 	cmd := exec.CommandContext(ctx, rt.bin(), "run", "--rm",
 		"--network", "none",
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
-		"-v", absSrc+":/src:ro",
+		"-v", bindMount(absSrc, "/src", relabel, "ro"),
 		"--entrypoint", "brief",
 		runnerImage, "/src",
 	)

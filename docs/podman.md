@@ -74,6 +74,67 @@ scan is **refused** rather than run under a weaker sandbox. It is gated to
 podman, so it covers both rootless and rootful podman; docker keeps its trusted
 path and pays no probe cost.
 
+## SELinux and bind-mount file passing
+
+On hosts with SELinux enabled — the default on Fedora, RHEL, CentOS Stream,
+Rocky and Alma, which is where rootless podman most often runs — the scan
+container runs as the confined type `container_t`, while the host paths
+scrutineer bind-mounts in keep their own labels: `/work` (the clone, staged
+skill, injected `CLAUDE.md` and output), `/claude-config` (the resumable session
+store), and `/src` (profile detection). The base `container-selinux` policy
+denies `container_t` access to those labels, so without intervention the
+container cannot read the clone or write its output and **every scan fails with
+`EACCES`** — even though uid/gid ownership (handled by `--userns=keep-id`) is
+correct. SELinux/MAC and DAC are separate layers; rootless podman on an enforcing
+host needs both addressed. This bites podman hardest, but the same applies to
+docker on an enforcing host, and the fix below covers both engines.
+
+scrutineer fixes this by appending the `:z` relabel option to its bind mounts.
+Detection is **engine-agnostic**: it checks the host for `/sys/fs/selinux` (the
+selinuxfs mountpoint) rather than parsing `podman info` / `docker info`, so it
+behaves identically for both engines (scrutineer execs the runtime locally and
+relabels local paths, so the host's own state is authoritative). The behaviour is
+gated by the `--selinux` switch (config key `selinux:`):
+
+| value | behaviour |
+|-------|-----------|
+| `auto` *(default)* | Relabel only when SELinux is detected on the host. Non-SELinux hosts are wholly unaffected — no relabel option, no smoke test, byte-for-byte the previous behaviour. |
+| `on` | Always relabel. Escape hatch for a host where scrutineer can't see selinuxfs but the engine still labels containers. Harmless on a non-SELinux host (the engine ignores the relabel request). |
+| `off` | Never relabel. Escape hatch for operators who pre-label the data dir themselves (`semanage fcontext` + `restorecon`, or `chcon -t container_file_t`) or run the engine with `--security-opt label=disable`. |
+
+When relabeling is active, a **startup smoke test** mounts a throwaway temp dir
+exactly the way a scan does (same `--user`, plus `--userns=keep-id` under
+rootless podman) and confirms the container can read a host-written file and
+write one the host can read back. A failure aborts startup with an actionable
+message rather than letting every scan fail silently. The check no-ops when
+relabeling is off or the runner image isn't present locally yet (the first scan
+pulls it and would surface the same issue then).
+
+### Why `:z` (shared) and not `:Z` (private)
+
+podman supports two relabel options. `:z` relabels the content to the shared type
+`container_file_t` with no MCS category; `:Z` adds a private per-container MCS
+category so only the labeling container can access it. scrutineer uses `:z`:
+
+- **Host read-back.** After a scan, the scrutineer *host* process reads the
+  output report back out of `/work`. `:z` keeps it host-readable; `:Z`'s private
+  category could be denied to a host process running in a confined SELinux domain
+  — locking scrutineer out of the very report it asked for.
+- **Overlapping mounts.** `/work` and `/src` point at the same clone tree; one
+  shared label keeps the two relabels consistent instead of churning a private
+  category between them.
+- **Isolation model.** scrutineer separates scans with per-scan work roots and,
+  under `--hardened`, per-scan `--internal` networks — not SELinux MCS. `:Z`'s
+  extra container-to-container separation isn't load-bearing here.
+
+The trade-off `:z` accepts is that any `container_t` process on the host could
+read a scan's *ephemeral* workspace. That's outside scrutineer's threat model
+(the concern is a hostile repo escaping the sandbox, not a sibling local
+container reading a throwaway clone). Operators who want the stricter per-scan
+MCS isolation should pre-label their data dir and run with `--selinux=off`; `:Z`
+is deliberately not exposed as a switch so the host read-back guarantee stays
+simple.
+
 ## Gaps and residual risks
 
 These are **not** addressed by the podman / rootless runtime and remain open:

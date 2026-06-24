@@ -94,6 +94,7 @@ type flags struct {
 	defaultModel     string
 	noDocker         bool
 	runtime          string
+	selinux          string
 	hardened         bool
 	runnerImage      string
 	profilesDir      string
@@ -122,6 +123,7 @@ func parseFlags() *flags {
 	flag.StringVar(&f.dataDir, "data", "./data", "data directory (db + workspaces)")
 	flag.StringVar(&f.effort, "effort", "high", "claude effort")
 	flag.StringVar(&f.runtime, "runtime", "docker", "container runtime: docker or podman (rootless podman supported)")
+	flag.StringVar(&f.selinux, "selinux", "auto", "SELinux bind-mount relabeling: auto (relabel when SELinux is detected on the host), on (always), off (never). Relabeling (\":z\") lets the container read /work and write its output on enforcing-SELinux hosts")
 	flag.BoolVar(&f.noDocker, "no-docker", false, "disable containerised runner even if a container runtime is available")
 	flag.BoolVar(&f.hardened, "hardened", false, "strict sandbox mode: container runtime required (no --no-docker fallback), egress restricted to *.anthropic.com + host skill API, read-only rootfs, internal network")
 	flag.StringVar(&f.runnerImage, "runner-image", worker.DefaultRunnerImage, "docker image for per-job containers")
@@ -165,6 +167,9 @@ func (f *flags) merge(cfg *config.Config) {
 	}
 	if cfg.Runtime != "" && !f.set["runtime"] {
 		f.runtime = cfg.Runtime
+	}
+	if cfg.SELinux != "" && !f.set["selinux"] {
+		f.selinux = cfg.SELinux
 	}
 	if cfg.Hardened != nil && !f.set["hardened"] {
 		f.hardened = *cfg.Hardened
@@ -270,6 +275,20 @@ func expandHome(path string) (string, error) {
 	return filepath.Join(home, strings.TrimPrefix(path, "~")), nil
 }
 
+// validateFlags runs the value-validators shared with the YAML config so an
+// invalid --clone / --runtime / --selinux fails the same way whether it came
+// from a flag or the config file. Split out of run to keep its cognitive
+// complexity in check.
+func validateFlags(f *flags) error {
+	if err := config.ValidateClone(f.cloneMode); err != nil {
+		return err
+	}
+	if err := config.ValidateRuntime(f.runtime); err != nil {
+		return err
+	}
+	return config.ValidateSELinux(f.selinux)
+}
+
 func run(log *slog.Logger) error {
 	f := parseFlags()
 
@@ -284,10 +303,7 @@ func run(log *slog.Logger) error {
 	if err := f.normalizePaths(); err != nil {
 		return err
 	}
-	if err := config.ValidateClone(f.cloneMode); err != nil {
-		return err
-	}
-	if err := config.ValidateRuntime(f.runtime); err != nil {
+	if err := validateFlags(f); err != nil {
 		return err
 	}
 	if key := os.Getenv("ANTHROPIC_API_KEY"); strings.HasPrefix(key, "sk-ant-oat") {
@@ -485,8 +501,9 @@ func hashPath(s string) string {
 	return r.Replace(s)
 }
 
-// runtimeSmokeTimeout bounds the rootless keep-id startup check so a hung
-// runtime daemon can't block startup indefinitely.
+// runtimeSmokeTimeout bounds each container startup check (rootless keep-id and
+// the SELinux bind-mount probe) so a hung runtime daemon can't block startup
+// indefinitely.
 const runtimeSmokeTimeout = 30 * time.Second
 
 // setupRunner picks the SkillRunner implementation for the run loop:
@@ -526,6 +543,17 @@ func setupRunner(f *flags, cfg *config.Config, log *slog.Logger) (worker.SkillRu
 	if err := worker.VerifyKeepID(smokeCtx, rt, f.runnerImage); err != nil {
 		return nil, "", err
 	}
+	// SELinux bind-mount relabeling (--selinux auto/on/off). Resolve it once
+	// here -- "auto" consults the host -- then prove a real relabeled mount works
+	// so an SELinux denial fails at startup instead of on every scan's file
+	// passing. Both no-op on a non-SELinux host with relabeling off (the default
+	// there), keeping that path unchanged.
+	relabel := worker.ResolveSELinuxRelabel(f.selinux)
+	selinuxCtx, cancelSE := context.WithTimeout(context.Background(), runtimeSmokeTimeout)
+	defer cancelSE()
+	if err := worker.VerifySELinuxMount(selinuxCtx, rt, f.runnerImage, relabel); err != nil {
+		return nil, "", err
+	}
 	allow := buildEgressAllow(f.hardened, cfg, f.anthropicBaseURL, log)
 	token := worker.NewProxyToken()
 	port, err := worker.StartEgressProxy(&worker.EgressProxy{Allow: allow, Token: token, APIPort: addrPort(f.addr), Log: log})
@@ -559,7 +587,7 @@ func setupRunner(f *flags, cfg *config.Config, log *slog.Logger) (worker.SkillRu
 	log.Info("container runtime detected, using containerised runner",
 		"runtime", rt.Bin, "rootless", rt.Rootless, "image", f.runnerImage,
 		"egress_proxy_port", port, "egress_allow", len(allow),
-		"host_gateway_ipv4", gwIP, "hardened", f.hardened)
+		"host_gateway_ipv4", gwIP, "hardened", f.hardened, "selinux_relabel", relabel)
 	// Skills inside the container reach the host via host.docker.internal,
 	// which the egress proxy rewrites to 127.0.0.1 when dialing.
 	apiBase = "http://" + net.JoinHostPort(worker.HostGatewayAlias, addrPort(f.addr)) + "/api"
@@ -574,6 +602,7 @@ func setupRunner(f *flags, cfg *config.Config, log *slog.Logger) (worker.SkillRu
 		ProfilesDir:      f.profilesDir,
 		Hardened:         f.hardened,
 		Runtime:          rt,
+		SELinuxRelabel:   relabel,
 	}, apiBase, nil
 }
 

@@ -231,6 +231,7 @@ Requirements:
 - **podman ≥ 4.7** — scrutineer reaches the host egress proxy via `--add-host host.docker.internal:host-gateway`, which older podman does not support; without it, scans fail with network errors. Startup logs a warning if the detected version looks too old or if the host-gateway address can't be resolved.
 - **`/etc/subuid` + `/etc/subgid`** — rootless podman maps the container user back to your host user with `--userns=keep-id` so scan output and the resumable session store stay host-owned. Your user needs a sub-id range (the usual `useradd` default provides one; run `podman system migrate` after changing it). Scrutineer runs a one-off keep-id smoke test at startup and fails fast with a hint if this is misconfigured.
 - **`skopeo` (optional)** — used in place of `docker buildx` to notice when a moved `:latest` runner tag should rebuild per-ecosystem profile images. Without it, profiles still build but key their cache on the image ref alone.
+- **SELinux** — on an SELinux-enabled host (the Fedora/RHEL/Rocky/Alma default) the runner relabels its bind mounts with `:z` so the container can read the clone and write its output; without it every scan fails with permission errors. This is handled automatically: `--selinux auto` (the default) detects the host, and a startup smoke test verifies a real relabeled mount works. Use `--selinux off` if you pre-label paths yourself, or `--selinux on` to force it. See [docs/podman.md](docs/podman.md#selinux-and-bind-mount-file-passing) for the `:z`-vs-`:Z` rationale.
 
 `--hardened` is supported under rootless podman and is verified fail-closed per scan (see the hardened-mode paragraph above). See [docs/podman.md](docs/podman.md) for the runtime's full security model and known gaps.
 
@@ -247,6 +248,7 @@ The `docker build` / `docker run` commands shown in this repo -- for the runner 
 | `-skills` | - | Local directory to load SKILL.md files from (repeatable) |
 | `-skills-repo` | - | `owner/repo[@ref]` or git HTTPS URL `https://host/path[@ref]` to clone skills from on startup; `@ref` pins a branch, tag or commit and the resolved SHA is recorded on every scan |
 | `--runtime` | `docker` | Container runtime: `docker` or `podman` (rootless podman supported) |
+| `--selinux` | `auto` | Bind-mount SELinux relabeling: `auto` (relabel when SELinux is detected), `on`, or `off` |
 | `--no-docker` | false | Disable containerised runner |
 | `--hardened` | false | Strict sandbox: container runtime required, egress restricted to `*.anthropic.com` + host skill API, read-only rootfs, internal network |
 | `--runner-image` | `ghcr.io/alpha-omega-security/scrutineer-runner:latest` | Container image for per-scan containers |

@@ -47,6 +47,15 @@ type DockerRunner struct {
 	// rootless flag that gates --userns=keep-id. The zero value is docker, so
 	// a bare DockerRunner{} keeps shelling out to "docker".
 	Runtime ContainerRuntime
+	// SELinuxRelabel, when true, appends the ":z" relabel option to every host
+	// bind mount (/work, /claude-config, /src) so the container can access them
+	// on an SELinux-enabled host. Without it, container_t is denied the host
+	// labels and every scan fails with EACCES on the clone and output. Resolved
+	// once at startup from the --selinux switch (auto/on/off); see bindMount for
+	// the ":z" vs ":Z" rationale and ResolveSELinuxRelabel for the gating. The
+	// zero value is false, so docker on a non-SELinux host stays byte-for-byte
+	// unchanged.
+	SELinuxRelabel bool
 }
 
 // hardenedNetworkPrefix is the common prefix used to name the per-scan
@@ -268,7 +277,7 @@ func (d DockerRunner) buildDockerArgs(absWork, image, perScanNetwork, claudeConf
 		"-e", "DISABLE_NON_ESSENTIAL_MODEL_CALLS=1",
 		"-e", "SEMGREP_SEND_METRICS=off",
 		"--tmpfs", "/tmp:rw,noexec,nosuid,size=256m",
-		"-v", absWork + ":/work",
+		"-v", bindMount(absWork, "/work", d.SELinuxRelabel),
 		"-w", "/work",
 		"--add-host", HostGatewayAlias + ":" + gwTarget,
 	}
@@ -286,7 +295,7 @@ func (d DockerRunner) buildDockerArgs(absWork, image, perScanNetwork, claudeConf
 		// mount stays writable even under hardened mode's --read-only
 		// rootfs, so resume works there too.
 		args = append(args,
-			"-v", claudeConfigDir+":/claude-config",
+			"-v", bindMount(claudeConfigDir, "/claude-config", d.SELinuxRelabel),
 			"-e", "CLAUDE_CONFIG_DIR=/claude-config",
 		)
 	}
@@ -344,7 +353,7 @@ func (d DockerRunner) resolveProfile(ctx context.Context, requested, src string,
 			return "", defaultImg
 		}
 	} else {
-		p = DetectProfile(ctx, d.Runtime, defaultImg, src)
+		p = DetectProfile(ctx, d.Runtime, defaultImg, src, d.SELinuxRelabel)
 		if p.IsDefault() {
 			return "", defaultImg
 		}

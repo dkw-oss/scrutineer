@@ -64,6 +64,35 @@ func TestBuildDockerArgs_KeepIDGating(t *testing.T) {
 	}
 }
 
+func TestBuildDockerArgs_SELinuxRelabel(t *testing.T) {
+	// With relabeling on, every host bind mount must carry the ":z" shared
+	// relabel so the container can access it on an SELinux host.
+	on := DockerRunner{SELinuxRelabel: true}
+	got := on.buildDockerArgs("/work/abs", "img:latest", "", "/data/cfg/scan-1")
+	if !hasAdjacent(got, "-v", "/work/abs:/work:z") {
+		t.Errorf("expected /work mount relabeled with :z in %v", got)
+	}
+	if !hasAdjacent(got, "-v", "/data/cfg/scan-1:/claude-config:z") {
+		t.Errorf("expected /claude-config mount relabeled with :z in %v", got)
+	}
+
+	// With relabeling off (the zero value / default), mounts are byte-for-byte
+	// unchanged -- no :z anywhere -- so non-SELinux hosts are unaffected.
+	off := DockerRunner{}
+	got = off.buildDockerArgs("/work/abs", "img:latest", "", "/data/cfg/scan-1")
+	if !hasAdjacent(got, "-v", "/work/abs:/work") {
+		t.Errorf("expected unrelabeled /work mount in %v", got)
+	}
+	if !hasAdjacent(got, "-v", "/data/cfg/scan-1:/claude-config") {
+		t.Errorf("expected unrelabeled /claude-config mount in %v", got)
+	}
+	for _, a := range got {
+		if strings.HasSuffix(a, ":z") || strings.HasSuffix(a, ",z") {
+			t.Errorf("did not expect any :z relabel when SELinuxRelabel is false, got %q in %v", a, got)
+		}
+	}
+}
+
 // hasAdjacent reports whether args contains flag immediately followed by val,
 // matching how docker run takes `-v host:container` / `-e KEY=VAL` pairs.
 func hasAdjacent(args []string, flag, val string) bool {
