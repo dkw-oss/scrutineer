@@ -56,10 +56,10 @@ network layer.
 `--hardened` is the enforced mode: each scan gets a dedicated `--internal`
 network so a workload ignoring the proxy has no route out, and concurrent scans
 cannot reach each other. On docker's bridge driver this property is well
-understood and trusted. **On podman it is verified, not assumed**, because
-rootless `--internal` semantics vary across network backends (pasta,
-slirp4netns, netavark) and versions. Before each hardened scan two throwaway
-containers run on the actual per-scan network:
+understood and trusted. **On rootless podman it is verified, not assumed**,
+because rootless `--internal` semantics vary across network backends (pasta,
+slirp4netns, netavark) and versions. Before each rootless-podman hardened scan
+two throwaway containers run on the actual per-scan network:
 
 1. **Egress is blocked** — with no proxy environment, an attempt to reach a
    *literal* routable IP must fail. A literal address (not a hostname) is used
@@ -71,8 +71,10 @@ containers run on the actual per-scan network:
 The check is **fail-closed**: if either property cannot be confirmed — including
 a probe that cannot even execute (e.g. no `curl` in a custom runner image) — the
 scan is **refused** rather than run under a weaker sandbox. It is gated to
-podman, so it covers both rootless and rootful podman; docker keeps its trusted
-path and pays no probe cost.
+**rootless** podman only: docker and rootful podman both run a bridge in the host
+netns (gateway on the host, docker's model), so they keep the trusted path and
+pay no probe cost. Rootless podman is the case where `--internal` can sever the
+host path across the pasta/slirp4netns boundary, which is why it alone is proven.
 
 ## `--hardened` under rootless podman
 

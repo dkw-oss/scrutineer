@@ -548,9 +548,10 @@ func (d DockerRunner) setupHardenedNetwork(sj SkillJob, image string) (string, f
 		return "", noop, fmt.Errorf("create hardened network: %w", err)
 	}
 	cleanup := func() { _ = exec.Command(d.Runtime.bin(), "network", "rm", "--", network).Run() }
-	// docker's bridge --internal is already trusted by this path; podman's
-	// rootless network backends need the isolation proven per scan.
-	if d.Runtime.Bin == "podman" {
+	// docker's bridge --internal is trusted, and so is rootful podman's (netavark
+	// + a bridge in the host netns, gateway on the host -- docker's model). Only
+	// rootless podman needs per-scan proof; see needsHardenedNetVerify.
+	if d.Runtime.needsHardenedNetVerify() {
 		if err := d.verifyHardenedNetwork(network, image); err != nil {
 			cleanup()
 			return "", noop, fmt.Errorf("hardened network verification: %w", err)

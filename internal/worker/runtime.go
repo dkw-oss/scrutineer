@@ -58,6 +58,18 @@ func (rt ContainerRuntime) NeedsKeepID() bool {
 	return rt.needsKeepID()
 }
 
+// needsHardenedNetVerify reports whether a hardened scan must prove its per-scan
+// --internal network fail-closed before running. True only for rootless podman:
+// its pasta/slirp4netns host path is what varies across backends and what
+// --internal can sever, so the isolation must be proven, not assumed. docker and
+// rootful podman both run a bridge in the host netns (gateway on the host), so
+// they keep the trusted path and pay no probe cost. Same condition as
+// needsKeepID today, but a deliberately separate concern (network trust vs uid
+// remap) so the two can diverge without surprising each other.
+func (rt ContainerRuntime) needsHardenedNetVerify() bool {
+	return rt.Bin == "podman" && rt.Rootless
+}
+
 // runtimeProber runs a runtime command and returns its stdout. The production
 // prober shells out; tests inject a stub so DetectRuntime's selection logic is
 // exercised without a live daemon.

@@ -44,6 +44,26 @@ func TestContainerRuntimeNeedsKeepID(t *testing.T) {
 	}
 }
 
+func TestContainerRuntimeNeedsHardenedNetVerify(t *testing.T) {
+	// Per-scan --internal verification must fire for rootless podman ONLY:
+	// docker and rootful podman use a trusted host-netns bridge (docker's model),
+	// so they keep the trusted path and skip the probe cost.
+	tests := []struct {
+		rt   ContainerRuntime
+		want bool
+	}{
+		{ContainerRuntime{}, false},                             // docker (zero value)
+		{ContainerRuntime{Bin: "docker"}, false},                // docker explicit
+		{ContainerRuntime{Bin: "podman"}, false},                // rootful podman -> trusted like docker
+		{ContainerRuntime{Bin: "podman", Rootless: true}, true}, // rootless podman -> verified
+	}
+	for _, tc := range tests {
+		if got := tc.rt.needsHardenedNetVerify(); got != tc.want {
+			t.Errorf("%+v.needsHardenedNetVerify() = %v, want %v", tc.rt, got, tc.want)
+		}
+	}
+}
+
 func TestDetectRuntime(t *testing.T) {
 	probeErr := errors.New("not installed")
 	type call struct {
