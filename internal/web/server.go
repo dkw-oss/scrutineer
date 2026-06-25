@@ -96,6 +96,12 @@ type Server struct {
 	// the network lookup, mirroring resolvePURL and listBranches.
 	fetchOrgRepos func(ctx context.Context, org string) ([]OrgRepo, error)
 
+	// prefetchEcosystems warms the per-repository ecosyste.ms cache
+	// when a new repo is added, in parallel with the triage enqueue. Field
+	// rather than a direct call so tests can stub the network fan-out,
+	// mirroring resolvePURL and friends.
+	prefetchEcosystems func(repoID uint)
+
 	// Runtime defaults a new scan inherits when the caller pins none.
 	// Both are seeded at startup from config/flags and mutable via the
 	// settings page, so a request can write while another reads. One
@@ -256,12 +262,26 @@ func New(gdb *gorm.DB, q *queue.Queue, log *slog.Logger, broker *Broker, w *work
 	s := &Server{DB: gdb, Queue: q, Log: log, Broker: broker, Worker: w, tmpl: t,
 		resolvePURL: resolvePURLRepo, listBranches: worker.ListRemoteBranches,
 		fetchOrgRepos: fetchGitHubOrgRepos}
+	s.prefetchEcosystems = s.ecosystemsPrefetch
 	if w != nil {
 		w.OnFindingCreated = s.autoEnqueueRevalidate
 		w.OnRevalidateVerdict = s.autoChainVerifyAfterRevalidate
-		w.OnScanFinalized = s.autoEnqueueFindingDedup
+		w.OnScanFinalized = s.onScanFinalized
 	}
 	return s, nil
+}
+
+// ecosystemsPrefetch warms the ecosyste.ms cache for a freshly added repo in a
+// detached goroutine: the HTTP request that created the repo returns
+// immediately while the fetch runs on its own timeout. Best-effort.
+func (s *Server) ecosystemsPrefetch(repoID uint) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), worker.EcosystemsPrefetchTimeout)
+		defer cancel()
+		if err := worker.RefreshEcosystems(ctx, s.DB, repoID, false, s.Log); err != nil {
+			s.Log.Warn("ecosystems prefetch failed", "repo", repoID, "err", err)
+		}
+	}()
 }
 
 func (s *Server) Handler() http.Handler {
@@ -280,6 +300,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /repositories/{id}/report.md", s.repoReport)
 	mux.HandleFunc("POST /repositories/{id}/scan", s.repoScan)
 	mux.HandleFunc("POST /repositories/{id}/scan-all", s.repoScanAll)
+	mux.HandleFunc("POST /repositories/{id}/validate-fix", s.validateFix)
 	mux.HandleFunc("POST /repositories/{id}/delete", s.repoDelete)
 	mux.HandleFunc("POST /repositories/{id}/disclosure-channel", s.repoDisclosureChannel)
 	mux.HandleFunc("POST /repositories/{id}/threat-model", s.repoThreatModelSave)
@@ -1075,7 +1096,7 @@ func (s *Server) addRepoAndScan(w http.ResponseWriter, r *http.Request, repoURL 
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 		return
 	}
-	repo, _, err := s.createOrTriageRepo(r.Context(), input, "")
+	repo, _, err := s.createOrTriageRepo(r.Context(), input, "", true)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1507,7 +1528,7 @@ func (s *Server) repoCreate(w http.ResponseWriter, r *http.Request) {
 	if ref := strings.TrimSpace(r.FormValue("ref")); ref != "" {
 		input.Branch = ref
 	}
-	repo, _, err := s.createOrTriageRepo(r.Context(), input, r.FormValue("model"))
+	repo, _, err := s.createOrTriageRepo(r.Context(), input, r.FormValue("model"), true)
 	if err != nil {
 		s.repoCreateError(w, r, "Couldn't add repository", err, http.StatusInternalServerError)
 		return
@@ -1590,7 +1611,7 @@ func (s *Server) repoBulkCreate(w http.ResponseWriter, r *http.Request) {
 			invalid = append(invalid, line)
 			continue
 		}
-		_, isNew, err := s.createOrTriageRepo(r.Context(), input, r.FormValue("model"))
+		_, isNew, err := s.createOrTriageRepo(r.Context(), input, r.FormValue("model"), true)
 		if err != nil {
 			invalid = append(invalid, line)
 			continue
@@ -1614,10 +1635,10 @@ func (s *Server) repoBulkCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 // createOrTriageRepo is the shared path for both single-add and bulk-add.
-// It FirstOrCreates the Repository row and, when the row is new, enqueues
-// the default skill. isNew reports whether the repo was actually created
-// (so callers can distinguish "queued" from "already present").
-func (s *Server) createOrTriageRepo(ctx context.Context, input RepoInput, model string) (db.Repository, bool, error) {
+// It FirstOrCreates the Repository row and, when the row is new and triage
+// is true, enqueues the default skill. isNew reports whether the repo was
+// actually created (so callers can distinguish "queued" from "already present").
+func (s *Server) createOrTriageRepo(ctx context.Context, input RepoInput, model string, triage bool) (db.Repository, bool, error) {
 	if input.Local {
 		path := strings.TrimPrefix(input.CloneURL, LocalScheme)
 		info, err := os.Stat(path)
@@ -1647,6 +1668,15 @@ func (s *Server) createOrTriageRepo(ctx context.Context, input RepoInput, model 
 		return repo, false, err
 	}
 	isNew := existing == 0
+	// Eagerly warm the ecosyste.ms cache for a freshly added remote repo, in
+	// parallel with the triage enqueue below. Local repos have no
+	// upstream entry; the goroutine is best-effort and detached from ctx.
+	if isNew && !repo.IsLocal() && s.prefetchEcosystems != nil {
+		s.prefetchEcosystems(repo.ID)
+	}
+	if !triage {
+		return repo, isNew, nil
+	}
 	if !isNew && input.Branch == "" && input.SubPath == "" {
 		return repo, false, nil
 	}
@@ -2137,9 +2167,12 @@ type ScanOpts struct {
 	Effort      string
 	FindingID   *uint
 	DependentID *uint
-	SubPath     string
-	Ref         string
-	Profile     string
+	// BaselineScanID marks a fix-validation anchor scan and pins the baseline
+	// scan it diffs against. See validate_fix.go.
+	BaselineScanID *uint
+	SubPath        string
+	Ref            string
+	Profile        string
 	// SessionID and ResumedFromScanID carry a failed scan's claude session
 	// into its retry so the new run continues the conversation with
 	// `claude -p --resume` instead of restarting from turn 0. Both empty
@@ -2206,6 +2239,7 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 		SkillName:         sk.Name,
 		FindingID:         opts.FindingID,
 		DependentID:       opts.DependentID,
+		BaselineScanID:    opts.BaselineScanID,
 		SubPath:           opts.SubPath,
 		Ref:               opts.Ref,
 		Profile:           opts.Profile,

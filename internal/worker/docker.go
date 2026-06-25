@@ -137,7 +137,7 @@ func (d DockerRunner) RunSkill(ctx context.Context, sj SkillJob, emit func(Event
 	work := sj.WorkRoot
 	absWork, _ := filepath.Abs(work)
 
-	profile, image := d.resolveProfile(ctx, sj.Profile, src, emit)
+	profile, image := d.resolveProfile(ctx, sj.Profile, src, sj.SubPath, emit)
 	if sj.RequiresProfile != "" && profile != sj.RequiresProfile {
 		got := profile
 		if got == "" {
@@ -362,7 +362,7 @@ func (d DockerRunner) buildDockerArgs(absWork, image string, hnet hardenedNet, c
 // default image); when empty, scrutineer probes the clone with `brief`
 // to auto-select. Any failure along the way falls back to the default
 // image with a log line so a missing profile never blocks a scan.
-func (d DockerRunner) resolveProfile(ctx context.Context, requested, src string, emit func(Event)) (string, string) {
+func (d DockerRunner) resolveProfile(ctx context.Context, requested, src, subPath string, emit func(Event)) (string, string) {
 	defaultImg := d.image()
 	if d.ProfilesDir == "" {
 		return "", defaultImg
@@ -378,7 +378,11 @@ func (d DockerRunner) resolveProfile(ctx context.Context, requested, src string,
 			return "", defaultImg
 		}
 	} else {
-		p = DetectProfile(ctx, d.Runtime, defaultImg, src, d.SELinuxRelabel)
+		srcDir := src
+		if subPath != "" {
+			srcDir = filepath.Join(src, subPath)
+		}
+		p = DetectProfile(ctx, d.Runtime, defaultImg, srcDir, d.SELinuxRelabel)
 		if p.IsDefault() {
 			return "", defaultImg
 		}
