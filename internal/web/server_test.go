@@ -1262,6 +1262,36 @@ func TestFindings_scannerToggle(t *testing.T) {
 	}
 }
 
+func TestFindings_importsShownByDefault(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	repo := db.Repository{URL: "https://example.com/imp", Name: "imp"}
+	s.DB.Create(&repo)
+	// An operator import: kind=import, with the producing tool in skill_name.
+	imp := db.Scan{RepositoryID: repo.ID, Kind: "import", Status: db.ScanDone, SkillName: "CodeQL"}
+	s.DB.Create(&imp)
+	// A genuine tool scanner running as a skill must stay hidden by default.
+	sg := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: "semgrep"}
+	s.DB.Create(&sg)
+	s.DB.Create(&db.Finding{ScanID: imp.ID, RepositoryID: repo.ID, Title: "imported-finding", Severity: "High"})
+	s.DB.Create(&db.Finding{ScanID: sg.ID, RepositoryID: repo.ID, Title: "semgrep-finding", Severity: "High"})
+
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, localReq("GET", "/findings"))
+	body := w.Body.String()
+	if !strings.Contains(body, "imported-finding") {
+		t.Error("imported findings should appear in the default findings list")
+	}
+	if strings.Contains(body, "semgrep-finding") {
+		t.Error("tool-scanner findings should still be hidden by default")
+	}
+	// The scanners toggle counts only the genuine scanner, not the import.
+	if !strings.Contains(body, "Include scanners (1)") {
+		t.Errorf("scanner badge should count only the semgrep finding, not the import: %s", body)
+	}
+}
+
 func TestFindingShow_rendersMissedCount(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()

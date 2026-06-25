@@ -1051,14 +1051,17 @@ const (
 	deepDiveSkillName = "security-deep-dive"
 	// nonScannerScanFilter selects findings whose parent scan is the
 	// security-deep-dive scanner, the legacy claude job (empty skill name),
-	// or has no recorded source — everything the UI groups under
-	// "non-scanner". scannerScanFilter is its structural inverse: the cheap
-	// tool scanners (semgrep, zizmor) and imported reports (CodeQL, Snyk,
-	// which carry the tool name as skill_name). Both take deepDiveSkillName
-	// as the single bound parameter; deriving one from the other keeps the
-	// Findings toggle and the dedup auto-enqueue agreeing on what "scanner"
-	// means without a second copy of the subquery to keep in sync.
-	nonScannerScanFilter = "scan_id IN (SELECT id FROM scans WHERE skill_name = ? OR skill_name = '' OR skill_name IS NULL)"
+	// has no recorded source, or is an operator import (kind=import) — every
+	// finding the UI shows by default. scannerScanFilter is its structural
+	// inverse: the cheap tool scanners (semgrep, zizmor) that run as skills
+	// and carry the tool name as skill_name. An import is a deliberate
+	// curation act, not a noisy auto-scanner, so it sits with the audit
+	// findings rather than behind the scanners toggle. Both take
+	// deepDiveSkillName as the single bound parameter; deriving one from the
+	// other keeps the Findings toggle and the dedup auto-enqueue agreeing on
+	// what "scanner" means without a second copy of the subquery to keep in
+	// sync — so imports now also count toward the dedup-pass threshold.
+	nonScannerScanFilter = "scan_id IN (SELECT id FROM scans WHERE skill_name = ? OR skill_name = '' OR skill_name IS NULL OR kind = 'import')"
 	scannerScanFilter    = "NOT (" + nonScannerScanFilter + ")"
 	// threatModelSkillName is the skill whose report feeds the Threat Model
 	// tab when present; repos that predate it fall back to the boundaries
@@ -1070,20 +1073,21 @@ const (
 // deepDiveFindingsCountSQL is a correlated subselect that counts deep-dive
 // findings for the surrounding repositories row. Used in the repos list
 // "findings" sort. Tool-scanner skills are excluded so the ordering matches
-// the counts shown in the Findings column.
+// the counts shown in the Findings column; operator imports (kind=import)
+// are included so the column agrees with the Findings tab.
 var deepDiveFindingsCountSQL = `SELECT COUNT(*) FROM findings f
 	    WHERE f.repository_id = repositories.id
 	      AND f.status NOT IN (` + db.ClosedFindingLifecycleSQLValues() + `)
 	      AND f.scan_id IN (SELECT id FROM scans
-	        WHERE skill_name = '` + deepDiveSkillName + `' OR skill_name = '' OR skill_name IS NULL)`
+	        WHERE skill_name = '` + deepDiveSkillName + `' OR skill_name = '' OR skill_name IS NULL OR kind = 'import')`
 
 // findingsScanIDs returns a GORM subquery selecting scan IDs that belong to
-// the curated audit (security-deep-dive) or to legacy/empty skill_name rows.
-// Use it as a `scan_id IN (?)` filter to keep listings consistent with the
-// repo Findings tab.
+// the curated audit (security-deep-dive), to legacy/empty skill_name rows, or
+// to an operator import (kind=import). Use it as a `scan_id IN (?)` filter to
+// keep listings consistent with the repo Findings tab.
 func findingsScanIDs(gdb *gorm.DB) *gorm.DB {
 	return gdb.Model(&db.Scan{}).Select("id").
-		Where("skill_name = ? OR skill_name = '' OR skill_name IS NULL", deepDiveSkillName)
+		Where("skill_name = ? OR skill_name = '' OR skill_name IS NULL OR kind = 'import'", deepDiveSkillName)
 }
 
 func findingSupportsExposure(scan db.Scan) bool {

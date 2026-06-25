@@ -195,22 +195,39 @@ func (s *Server) importResult(res ingest.Result, repoOverride string) (map[strin
 func (s *Server) importFindings(scan *db.Scan, res ingest.Result) (created []uint, observed int) {
 	seen := map[string]bool{}
 	for _, in := range res.Findings {
+		// A bundle may carry a per-finding commit (findings from scans at
+		// different revisions); fall back to the scan/bundle commit, which is
+		// all the other formats supply.
+		commit := firstNonEmpty(in.Commit, scan.Commit)
 		f := db.Finding{
 			ScanID:         scan.ID,
 			RepositoryID:   scan.RepositoryID,
-			Commit:         scan.Commit,
+			Commit:         commit,
+			SubPath:        in.SubPath,
 			Title:          in.Title,
 			Severity:       in.Severity,
 			Confidence:     firstNonEmpty(in.Confidence, "low"),
 			CWE:            in.CWE,
 			Location:       in.Location,
-			Trace:          appendFixDescription(in.Description, in.SuggestedFix),
+			Locations:      in.Locations,
+			VID:            in.VID,
+			Reachability:   in.Reachability,
+			QualityTier:    in.QualityTier,
+			Trace:          appendFixDescription(in.Description, in.SuggestedFix, in.FixCommit),
+			Boundary:       in.Boundary,
+			Validation:     in.Validation,
+			PriorArt:       in.PriorArt,
+			Reach:          in.Reach,
+			Rating:         in.Rating,
 			ImportedFrom:   res.Tool,
 			LastSeenScanID: scan.ID,
-			LastSeenCommit: scan.Commit,
+			LastSeenCommit: commit,
 			SeenCount:      1,
 		}
-		f.Fingerprint = db.FingerprintFinding(res.Tool, "", f.CWE, f.Location, f.Title)
+		// Include the sub-path so two findings at the same CWE/location/title
+		// in different monorepo sub-projects do not collide on one fingerprint.
+		// Other formats leave SubPath empty, so their fingerprint is unchanged.
+		f.Fingerprint = db.FingerprintFinding(res.Tool, f.SubPath, f.CWE, f.Location, f.Title)
 
 		if seen[f.Fingerprint] {
 			continue
@@ -293,14 +310,21 @@ func (s *Server) maybeDecrypt(body []byte) ([]byte, error) {
 
 // appendFixDescription folds an ingested fix description into the Trace
 // markdown rather than writing Finding.SuggestedFix, which is reserved for
-// diffs that have passed gatePatch (see finding_patch.go).
-func appendFixDescription(desc, fix string) string {
+// diffs that have passed gatePatch (see finding_patch.go). When the source
+// also supplied the base commit the fix applies to, it is noted alongside so
+// the operator can rebase before promoting the diff.
+func appendFixDescription(desc, fix, fixCommit string) string {
 	fix = strings.TrimSpace(fix)
 	if fix == "" {
 		return desc
 	}
-	if desc == "" {
-		return "## Suggested fix\n\n" + fix
+	section := "## Suggested fix\n\n"
+	if fixCommit = strings.TrimSpace(fixCommit); fixCommit != "" {
+		section += "Applies to commit `" + fixCommit + "`.\n\n"
 	}
-	return desc + "\n\n## Suggested fix\n\n" + fix
+	section += fix
+	if desc == "" {
+		return section
+	}
+	return desc + "\n\n" + section
 }

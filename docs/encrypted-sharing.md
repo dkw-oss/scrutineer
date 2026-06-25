@@ -48,14 +48,25 @@ Plaintext bundles work too — drop `&encrypt=1` on export and import accepts th
       "repository": "https://github.com/owner/repo",
       "commit": "abc123",
       "tool": "scrutineer",
+      "generated_at": "2026-06-25T12:00:00Z",
       "findings": [
-        { "title": "...", "description": "...", "severity": "High", ... }
+        {
+          "title": "...", "description": "...", "severity": "High",
+          "confidence": "high", "cwe": "CWE-89", "location": "...",
+          "patch": "...", "fix_commit": "...",
+          "commit": "...", "sub_path": "...", "locations": "...",
+          "vid": "...", "reachability": "reachable", "quality_tier": "high",
+          "boundary": "...", "validation": "...", "prior_art": "...",
+          "reach": "...", "rating": "..."
+        }
       ]
     }
 
-The shareable unit is one repository. Severity and status filters apply: `?format=bundle&severity=High` exports only High findings.
+`generated_at` (RFC3339 UTC) records when the bundle was produced. It lives inside the encrypted JSON — not in cleartext around the armor, which would leak the production time to anyone who intercepts the file — and the importer ignores it; it is provenance for the human recipient. The shareable unit is one repository. Severity and status filters apply: `?format=bundle&severity=High` exports only High findings.
 
-Only the substance of each finding travels: title, description, severity, confidence, CWE, location, and suggested patch. Analyst-set triage state (status, CVE/GHSA id, affected packages, fix version, references) is intentionally left out — the recipient imports the finding, not your team's triage, and triages it independently on their side (in their case management tool of choice).
+What travels is the substance of each finding plus the reasoning that justifies it. Alongside title, severity, confidence, CWE, location and the suggested `patch`, the bundle carries the six-step audit narrative (`description` is the trace; `boundary`, `validation`, `prior_art`, `reach` and `rating` are the other five steps), the `reachability` and `quality_tier` verdicts, the cross-party `vid` correlation hash, the patch's base `fix_commit`, and enough provenance — per-finding `commit`, `sub_path` and the full `locations` set — to resolve the location unambiguously on the receiving side. Every field beyond the original seven is emitted only when set, and the importer tolerates bundles produced before they existed, so the shape is backward-compatible in both directions.
+
+Two things are deliberately left out. Analyst-set triage state (status, CVE/GHSA id, affected packages, fix version, references, assignee) does not travel — the recipient imports the finding, not your team's triage, and triages it independently on their side (in their case management tool of choice). Source snippets are also omitted: the recipient usually owns the code, and a snippet would embed verbatim source into a shared artifact.
 
 ## Key types
 

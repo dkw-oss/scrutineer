@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"filippo.io/age"
 	"filippo.io/age/armor"
@@ -713,5 +714,181 @@ func TestExportScans_carriesDBFieldsAndHidesAPIToken(t *testing.T) {
 	}
 	if got := w.Body.String(); strings.Contains(got, "secret-token-do-not-export") {
 		t.Errorf("APIToken value leaked into response body: %s", got)
+	}
+}
+
+// richFinding seeds one finding with every field the enriched bundle carries,
+// against a fresh repo, and returns the repo. Shared by the bundle-content and
+// round-trip tests.
+func seedRichFinding(t *testing.T, s *Server, url string) db.Repository {
+	t.Helper()
+	repo := db.Repository{URL: url, Name: "rich"}
+	s.DB.Create(&repo)
+	scan := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: deepDiveSkillName, Commit: "scan-commit"}
+	s.DB.Create(&scan)
+	s.DB.Create(&db.Finding{
+		ScanID: scan.ID, RepositoryID: repo.ID, Commit: "find-commit", SubPath: "services/api",
+		Title: "Path traversal", Severity: sevHigh, Confidence: "high",
+		CWE: "CWE-22", Location: "h/download.go:88",
+		Locations: "h/download.go:88\nh/legacy.go:12",
+		VID:       "VID-aaaa-bbbb", Reachability: "reachable", QualityTier: "high",
+		Trace:    "User input reaches path.join.",
+		Boundary: "public handler", Validation: "confirmed locally",
+		PriorArt: "CVE-2021-1", Reach: "public entry", Rating: "high impact",
+		SuggestedFix: "--- a/x\n+++ b/x\n", SuggestedFixCommit: "fixbase9",
+	})
+	return repo
+}
+
+func TestExportBundle_carriesEnrichedFields(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	repo := seedRichFinding(t, s, "https://github.com/test/enriched")
+
+	r := httptest.NewRequest("GET", "/api/v1/repositories/"+strconv.FormatUint(uint64(repo.ID), 10)+"/findings?format=bundle", nil)
+	r.Host = testHost
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+
+	var bundle struct {
+		GeneratedAt string           `json:"generated_at"`
+		Findings    []sharingFinding `json:"findings"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &bundle); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	// generated_at lives inside the JSON and is a valid RFC3339 timestamp.
+	if _, err := time.Parse(time.RFC3339, bundle.GeneratedAt); err != nil {
+		t.Errorf("generated_at %q not RFC3339: %v", bundle.GeneratedAt, err)
+	}
+	if len(bundle.Findings) != 1 {
+		t.Fatalf("got %d findings, want 1", len(bundle.Findings))
+	}
+	f := bundle.Findings[0]
+	checks := []struct{ name, got, want string }{
+		{"description", f.Description, "User input reaches path.join."},
+		{"commit", f.Commit, "find-commit"},
+		{"sub_path", f.SubPath, "services/api"},
+		{"locations", f.Locations, "h/download.go:88\nh/legacy.go:12"},
+		{"vid", f.VID, "VID-aaaa-bbbb"},
+		{"reachability", f.Reachability, "reachable"},
+		{"quality_tier", f.QualityTier, "high"},
+		{"boundary", f.Boundary, "public handler"},
+		{"validation", f.Validation, "confirmed locally"},
+		{"prior_art", f.PriorArt, "CVE-2021-1"},
+		{"reach", f.Reach, "public entry"},
+		{"rating", f.Rating, "high impact"},
+		{"patch", f.Patch, "--- a/x\n+++ b/x\n"},
+		{"fix_commit", f.FixCommit, "fixbase9"},
+	}
+	for _, c := range checks {
+		if c.got != c.want {
+			t.Errorf("%s = %q, want %q", c.name, c.got, c.want)
+		}
+	}
+}
+
+func TestExportBundleRoundTrip_carriesAllFields(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	src := seedRichFinding(t, s, "https://github.com/test/src")
+
+	// Export.
+	er := httptest.NewRequest("GET", "/api/v1/repositories/"+strconv.FormatUint(uint64(src.ID), 10)+"/findings?format=bundle", nil)
+	er.Host = testHost
+	ew := httptest.NewRecorder()
+	s.Handler().ServeHTTP(ew, er)
+	if ew.Code != 200 {
+		t.Fatalf("export status %d: %s", ew.Code, ew.Body)
+	}
+
+	// Import into a *different* repo (?repo=) so the finding lands fresh
+	// rather than deduping against the source row.
+	ir := httptest.NewRequest("POST", "/api/v1/import?repo=https://github.com/test/dest", strings.NewReader(ew.Body.String()))
+	ir.Host = testHost
+	iw := httptest.NewRecorder()
+	s.Handler().ServeHTTP(iw, ir)
+	if iw.Code != 201 {
+		t.Fatalf("import status %d: %s", iw.Code, iw.Body)
+	}
+
+	var dest db.Repository
+	if err := s.DB.Where("url = ?", "https://github.com/test/dest").First(&dest).Error; err != nil {
+		t.Fatalf("dest repo not created: %v", err)
+	}
+	var got db.Finding
+	if err := s.DB.Where("repository_id = ?", dest.ID).First(&got).Error; err != nil {
+		t.Fatalf("imported finding not found: %v", err)
+	}
+
+	if got.Commit != "find-commit" {
+		t.Errorf("Commit = %q, want find-commit (per-finding, not scan/bundle)", got.Commit)
+	}
+	if got.SubPath != "services/api" {
+		t.Errorf("SubPath = %q", got.SubPath)
+	}
+	if got.Locations != "h/download.go:88\nh/legacy.go:12" {
+		t.Errorf("Locations = %q", got.Locations)
+	}
+	if got.VID != "VID-aaaa-bbbb" {
+		t.Errorf("VID = %q", got.VID)
+	}
+	if got.Reachability != "reachable" || got.QualityTier != "high" {
+		t.Errorf("Reachability/QualityTier = %q/%q", got.Reachability, got.QualityTier)
+	}
+	if got.Boundary != "public handler" || got.Validation != "confirmed locally" ||
+		got.PriorArt != "CVE-2021-1" || got.Reach != "public entry" || got.Rating != "high impact" {
+		t.Errorf("audit prose mismatch: %+v", got)
+	}
+	// Patch stays gated out of SuggestedFix and is folded into Trace, with the
+	// fix commit noted alongside.
+	if got.SuggestedFix != "" {
+		t.Errorf("SuggestedFix should stay empty (gated), got %q", got.SuggestedFix)
+	}
+	if !strings.Contains(got.Trace, "User input reaches path.join.") {
+		t.Errorf("Trace missing original description: %q", got.Trace)
+	}
+	if !strings.Contains(got.Trace, "## Suggested fix") || !strings.Contains(got.Trace, "--- a/x") {
+		t.Errorf("Trace missing folded patch: %q", got.Trace)
+	}
+	if !strings.Contains(got.Trace, "Applies to commit `fixbase9`") {
+		t.Errorf("Trace missing fix-commit note: %q", got.Trace)
+	}
+}
+
+func TestImportLegacyBundle_minimalFieldsStillWork(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	// A bundle produced before the enriched fields existed: only the original
+	// seven finding fields, and no generated_at. It must still import cleanly,
+	// leaving the new columns empty and falling back to the bundle commit.
+	legacy := `{"repository":"https://github.com/test/legacy","commit":"old1","tool":"scrutineer",` +
+		`"findings":[{"title":"old finding","description":"d","severity":"High","confidence":"high",` +
+		`"cwe":"CWE-79","location":"a.go:1","patch":"--- a\n+++ b\n"}]}`
+	r := httptest.NewRequest("POST", "/api/v1/import", strings.NewReader(legacy))
+	r.Host = testHost
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+	if w.Code != 201 {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+
+	var repo db.Repository
+	if err := s.DB.Where("url = ?", "https://github.com/test/legacy").First(&repo).Error; err != nil {
+		t.Fatalf("repo not created: %v", err)
+	}
+	var got db.Finding
+	if err := s.DB.Where("repository_id = ?", repo.ID).First(&got).Error; err != nil {
+		t.Fatalf("finding not created: %v", err)
+	}
+	if got.Commit != "old1" {
+		t.Errorf("Commit = %q, want old1 (bundle-level fallback)", got.Commit)
+	}
+	if got.SubPath != "" || got.VID != "" || got.Reachability != "" || got.Boundary != "" {
+		t.Errorf("legacy import should leave new columns empty: %+v", got)
 	}
 }

@@ -91,14 +91,22 @@ func TestKnownURLsMatchDependents(t *testing.T) {
 }
 
 func TestAppendFixDescription(t *testing.T) {
-	if got := appendFixDescription("desc", ""); got != "desc" {
+	if got := appendFixDescription("desc", "", ""); got != "desc" {
 		t.Errorf("empty fix: got %q", got)
 	}
-	if got := appendFixDescription("", "do x"); got != "## Suggested fix\n\ndo x" {
+	if got := appendFixDescription("", "do x", ""); got != "## Suggested fix\n\ndo x" {
 		t.Errorf("empty desc: got %q", got)
 	}
-	if got := appendFixDescription("desc", "  do x  "); got != "desc\n\n## Suggested fix\n\ndo x" {
+	if got := appendFixDescription("desc", "  do x  ", ""); got != "desc\n\n## Suggested fix\n\ndo x" {
 		t.Errorf("both: got %q", got)
+	}
+	// A fix commit is noted inside the suggested-fix section so the operator
+	// can rebase before promoting the diff; an empty fix drops it entirely.
+	if got := appendFixDescription("", "do x", "abc123"); got != "## Suggested fix\n\nApplies to commit `abc123`.\n\ndo x" {
+		t.Errorf("with fix commit: got %q", got)
+	}
+	if got := appendFixDescription("desc", "", "abc123"); got != "desc" {
+		t.Errorf("fix commit but no fix: got %q", got)
 	}
 }
 
