@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -52,6 +53,11 @@ func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
+	revalidate, err := importRevalidate(r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	results, format, err := ingest.Parse(body)
 	if errors.Is(err, ingest.ErrUnrecognised) {
 		s.importFallback(w, r, body)
@@ -65,7 +71,7 @@ func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
 	repoOverride := r.URL.Query().Get("repo")
 	out := make([]map[string]any, 0, len(results))
 	for _, res := range results {
-		summary, err := s.importResult(res, repoOverride)
+		summary, err := s.importResult(res, repoOverride, revalidate)
 		if err != nil {
 			writeAPIError(w, http.StatusUnprocessableEntity, err.Error())
 			return
@@ -76,6 +82,27 @@ func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
 		"format":  string(format),
 		"results": out,
 	})
+}
+
+// importRevalidate reads the ?revalidate= toggle that controls whether
+// each newly-imported finding is fed into the revalidate -> verify funnel.
+// Absent means true: the default behaviour, since an external tool's
+// severity is an unvalidated claim worth the cheap pre-sort. An explicit
+// false (or 0) imports the findings as-is and enqueues nothing — for
+// callers ingesting already-audited findings, such as a trusted sharing
+// bundle that already carries the full audit narrative. A malformed value
+// is a 400 rather than a silent fall-back to true, so a caller that meant
+// to disable the funnel never gets billed for it by a typo.
+func importRevalidate(r *http.Request) (bool, error) {
+	v := r.URL.Query().Get("revalidate")
+	if v == "" {
+		return true, nil
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return false, fmt.Errorf("revalidate: must be true or false, got %q", v)
+	}
+	return b, nil
 }
 
 // ingestSkillName is the skill that normalises reports no deterministic
@@ -144,7 +171,7 @@ func (s *Server) ensureImportRepo(repoURL string) (db.Repository, error) {
 	return repo, nil
 }
 
-func (s *Server) importResult(res ingest.Result, repoOverride string) (map[string]any, error) {
+func (s *Server) importResult(res ingest.Result, repoOverride string, revalidate bool) (map[string]any, error) {
 	repoURL := res.RepoURL
 	if repoOverride != "" {
 		repoURL = repoOverride
@@ -173,7 +200,7 @@ func (s *Server) importResult(res ingest.Result, repoOverride string) (map[strin
 		return nil, err
 	}
 
-	created, observed := s.importFindings(&scan, res)
+	created, observed := s.importFindings(&scan, res, revalidate)
 	s.Log.Info("import",
 		"repo", repo.URL, "tool", res.Tool, "scan", scan.ID,
 		"created", len(created), "observed", observed)
@@ -192,7 +219,7 @@ func (s *Server) importResult(res ingest.Result, repoOverride string) (map[strin
 // importFindings mirrors the worker's fingerprint-then-upsert loop so an
 // import behaves like a scan: re-importing the same report bumps
 // SeenCount on existing rows instead of inserting duplicates.
-func (s *Server) importFindings(scan *db.Scan, res ingest.Result) (created []uint, observed int) {
+func (s *Server) importFindings(scan *db.Scan, res ingest.Result, revalidate bool) (created []uint, observed int) {
 	seen := map[string]bool{}
 	for _, in := range res.Findings {
 		// A bundle may carry a per-finding commit (findings from scans at
@@ -267,9 +294,13 @@ func (s *Server) importFindings(scan *db.Scan, res ingest.Result) (created []uin
 		// Imported findings carry an external tool's unvalidated severity
 		// claim, so revalidate runs over every newly-imported finding
 		// regardless of severity (not just High/Critical, as it does for
-		// security-deep-dive output).
-		fcopy := f
-		s.enqueueRevalidateForFinding(context.Background(), &fcopy)
+		// security-deep-dive output). ?revalidate=false skips this — and the
+		// verify it chains into — for callers importing already-audited
+		// findings such as a trusted sharing bundle.
+		if revalidate {
+			fcopy := f
+			s.enqueueRevalidateForFinding(context.Background(), &fcopy)
+		}
 	}
 	return created, observed
 }

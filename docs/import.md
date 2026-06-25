@@ -37,6 +37,16 @@ Each import becomes one `Scan` row per repository with `kind = import` and `skil
 
 Re-importing the same report against the same repository upserts: findings with a matching fingerprint update `last_seen_scan_id`, bump `seen_count`, and clear the missed-count counter. Nothing is duplicated and nothing is deleted. Findings that were imported once and not present in a later import simply do not get observed; the existing miss-count machinery is the right tool for "the upstream scanner no longer flags this" and it is left to the operator to run `verify` if they want to confirm.
 
+## Revalidation on import
+
+Each *newly-created* finding is enqueued for a `revalidate` run — the cheap classifier that triages an external tool's unvalidated severity claim and, when it confirms a High/Critical true positive, chains into the heavier `verify`. This runs over every imported finding regardless of severity (a native deep-dive only revalidates its own High/Critical output, but an import's severity is an outside claim worth checking even when it reads Low). Re-observed findings — those matching an existing fingerprint — are left alone, and a revalidate already queued or running for a finding is never double-queued.
+
+To import without priming this funnel, pass `?revalidate=false`:
+
+    curl --data-binary @bundle.json "http://127.0.0.1:8080/api/v1/import?revalidate=false"
+
+The findings still land; nothing is enqueued. The natural use is ingesting findings that have already been through an audit elsewhere — a trusted [sharing bundle](encrypted-sharing.md) arrives carrying the producer's full audit narrative (`boundary`, `validation`, `prior_art`, `reach`, `rating`), so re-running even the cheap classifier on it is redundant spend. The default is `revalidate=true`; a value that is neither `true`/`false` nor `1`/`0` is rejected with `400` rather than silently treated as on, so a caller that meant to disable the funnel is never billed for it by a typo. (The toggle has no effect on the unrecognised-format fallback below: those findings come from the `ingest` skill asynchronously and are not put through the import-time enqueue.)
+
 ## Unrecognised formats
 
 A body that matches none of the formats below is not rejected outright. When `?repo=` is supplied, the payload is handed to the `ingest` skill instead: the raw bytes are staged into the skill's workspace at `import/report`, the repository is cloned alongside at `./src`, and the model normalises whatever the report is (a scanner's bespoke JSON, a pentest write-up, a pasted email) into findings, verifying each claimed location against the checkout. The response is `202 Accepted` with the queued `scan_id`:
@@ -156,6 +166,7 @@ The flow is the same regardless of format:
 2. **Resolve the repository.** `?repo=` if present, otherwise `Result.RepoURL`. The URL is normalised through `ParseRepoInput` (the same path the UI uses) and a `Repository` row is created on first sight.
 3. **Create the scan row.** One per `Result`, with `kind = import`, `status = done`, `skill_name = <tool>`, `findings_count = len(findings)`. The scan's `commit` is `Result.Commit` when the format carried one (SARIF `versionControlProvenance`, minimal-JSON `commit`).
 4. **Upsert findings.** Each parsed finding is fingerprinted with the tool name in the skill-name slot and its sub-path (`db.FingerprintFinding(tool, sub_path, cwe, location, title)`), then matched against existing rows by `(repository_id, fingerprint)`. The sub-path is empty for every format except scrutineer's own bundle, so their fingerprints are unchanged; carrying it keeps two findings at the same location in different monorepo sub-projects from collapsing onto one fingerprint. Match found: `last_seen_scan_id`, `last_seen_commit`, `seen_count` are updated and a `FindingHistory` row is written. No match: a new `Finding` row is created with `imported_from = <tool>`. Whatever fix an ingest carries — the `suggested_fix` a parser extracted from a SARIF/markdown report, or the minimal/bundle `patch` — is folded into the finding's trace prose, not written to the `suggested_fix` column, which is reserved for diffs a `patch` run has put through the applicability gate.
+5. **Prime the funnel.** Each newly-created finding is enqueued for `revalidate` (which chains into `verify` on a confirmed High/Critical), unless `?revalidate=false` was passed. See [Revalidation on import](#revalidation-on-import) above.
 
 The full column set is in [database.md](database.md); the `Finding.ImportedFrom` field is what distinguishes imported findings from native ones. The scans index filters on `kind = import` to show only imports, and imported findings appear in the main Findings list by default, alongside audit findings — an import is curated data, not noisy auto-scanner output, so it is not hidden behind the scanners toggle.
 

@@ -914,6 +914,16 @@ paths:
           in: query
           description: Repository URL to attribute findings to. Overrides any provenance in the body.
           schema: { type: string, format: uri }
+        - name: revalidate
+          in: query
+          description: |
+            Whether each newly-imported finding is enqueued for the
+            `revalidate` pre-sort (which chains into `verify` on a confirmed
+            High/Critical). Defaults to true. Pass `false` to import
+            already-audited findings — e.g. a trusted sharing bundle — without
+            priming the funnel. A value that is neither true/false nor 1/0 is a
+            400.
+          schema: { type: boolean, default: true }
       requestBody:
         required: true
         content:
@@ -959,7 +969,7 @@ paths:
                   skill: { type: string, enum: [ingest] }
                   status: { type: string, enum: [queued] }
         '400':
-          description: Body unreadable or empty
+          description: Body unreadable or empty, or `revalidate` is not a boolean
         '403':
           description: Host header is not localhost
         '413':
