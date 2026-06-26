@@ -345,6 +345,9 @@ func (d ContainerRunner) buildRunArgs(absWork, image string, hnet hardenedNet, c
 	} else if !d.Hardened {
 		args = append(args, "--network", "none")
 	}
+	// Forwarding the host Anthropic credential into the container is a known
+	// residual: in-container code (T1) can read it. Closing it needs proxy-side
+	// credential injection -- see threatmodel.md T1/T13.
 	if os.Getenv("ANTHROPIC_API_KEY") != "" {
 		args = append(args, "-e", "ANTHROPIC_API_KEY")
 	}
