@@ -29,7 +29,12 @@ type Config struct {
 	Models       []Model  `yaml:"models"`
 	Skills       []string `yaml:"skills"`
 	SkillsRepo   string   `yaml:"skills_repo"`
-	NoDocker     *bool    `yaml:"no_docker"`
+	// NoContainer disables the containerised runner so claude runs directly on
+	// the host (no isolation). NoDocker is the pre-rename alias, still honoured
+	// so existing configs keep working; no_container wins when both are set
+	// (coalesced in Load).
+	NoContainer *bool `yaml:"no_container"`
+	NoDocker    *bool `yaml:"no_docker"`
 	// Runtime selects the container engine: "docker" (default) or "podman".
 	// Empty leaves the built-in default (docker). Rootless podman is detected
 	// automatically and gets --userns=keep-id so bind-mount output stays
@@ -43,7 +48,7 @@ type Config struct {
 	// write its output. Non-SELinux hosts are unaffected. See docs/podman.md.
 	SELinux string `yaml:"selinux"`
 	// Hardened enforces the strictest sandbox mode: a container runtime is
-	// required (no --no-docker fallback), egress is restricted to
+	// required (no --no-container fallback), egress is restricted to
 	// *.anthropic.com plus host.docker.internal, the container rootfs is
 	// read-only, and the runner attaches to an internal network whose only
 	// route out is scrutineer's allowlisting proxy. egress_allow is ignored
@@ -207,6 +212,11 @@ func Load(path string) (*Config, error) {
 	var c Config
 	if err := yaml.Unmarshal(b, &c); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	// no_container is the canonical key; no_docker is the retained alias.
+	// Fold the alias into NoContainer so the rest of the code reads one field.
+	if c.NoContainer == nil {
+		c.NoContainer = c.NoDocker
 	}
 	if err := ValidateClone(c.Clone); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)

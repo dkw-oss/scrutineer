@@ -209,7 +209,7 @@ func (w *Worker) scanWorkRoot(scan *db.Scan) string {
 }
 
 // claudeConfigDir is the host directory holding the claude session store
-// for this scan's lineage. The docker runner mounts it as CLAUDE_CONFIG_DIR
+// for this scan's lineage. The container runner mounts it as CLAUDE_CONFIG_DIR
 // so the conversation survives a container exit; it lives outside the
 // per-scan workspace (which is deleted when the scan finishes) and is keyed
 // by the lineage root so a retry finds the original run's session. The
@@ -239,7 +239,7 @@ func (w *Worker) RemoveScanArtifacts(scanID uint) error {
 
 // applyResume fills a SkillJob's session-resume inputs from the scan: the
 // claude session id to --resume (set on a retry that carries one forward
-// from a failed or max-turns-hit run) and the persistent config dir the docker
+// from a failed or max-turns-hit run) and the persistent config dir the container
 // runner mounts so the session store survives a container exit. A fresh scan
 // has an empty SessionID, so the runner just starts a new conversation.
 func (w *Worker) applyResume(scan *db.Scan, sj *SkillJob, emit func(Event)) {

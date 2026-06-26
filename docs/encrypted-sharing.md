@@ -68,7 +68,7 @@ SSH keys are the default. Age-native X25519 keys also work if you prefer them.
 
 Both types can be mixed in a single recipients file. The format is auto-detected per line.
 
-Passphrase-protected SSH keys are supported. When scrutineer detects an encrypted key at startup, it prompts on stderr and reads the passphrase from stdin (echo disabled). The passphrase is validated immediately — a wrong passphrase fails startup, not the first import. If stdin is not a terminal (e.g. systemd, Docker), the startup fails with a clear message; use an unencrypted key or an age-native key in headless deployments.
+Passphrase-protected SSH keys are supported. When scrutineer detects an encrypted key at startup, it prompts on stderr and reads the passphrase from stdin (echo disabled). The passphrase is validated immediately — a wrong passphrase fails startup, not the first import. If stdin is not a terminal (e.g. systemd, a container), the startup fails with a clear message; use an unencrypted key or an age-native key in headless deployments.
 
 ### Unsupported: FIDO2 / ed25519-sk keys
 
