@@ -62,7 +62,7 @@ Plaintext bundles work too — drop `&encrypt=1` on export and import accepts th
       ]
     }
 
-`generated_at` (RFC3339 UTC) records when the bundle was produced. It lives inside the encrypted JSON — not in cleartext around the armor, which would leak the production time to anyone who intercepts the file — and the importer ignores it; it is provenance for the human recipient. The shareable unit is one repository. Severity and status filters apply: `?format=bundle&severity=High` exports only High findings.
+`generated_at` (RFC3339 UTC) records when the bundle was produced. It lives inside the encrypted JSON — not in cleartext around the armor, which would leak the production time to anyone who intercepts the file — and the importer ignores it; it is provenance for the human recipient. The shareable unit is one repository. Severity and status filters apply: `?format=bundle&severity=High` exports only High findings. By default the bundle carries every finding for the repository, including tool-scanner output; add `&scope=findings` to share only the curated Findings bucket — the deep-dive and vuln-scan audits plus operator imports — dropping per-repo semgrep/zizmor noise.
 
 What travels is the substance of each finding plus the reasoning that justifies it. Alongside title, severity, confidence, CWE, location and the suggested `patch`, the bundle carries the six-step audit narrative (`description` is the trace; `boundary`, `validation`, `prior_art`, `reach` and `rating` are the other five steps), the `reachability` and `quality_tier` verdicts, the cross-party `vid` correlation hash, the patch's base `fix_commit`, and enough provenance — per-finding `commit`, `sub_path` and the full `locations` set — to resolve the location unambiguously on the receiving side. Every field beyond the original seven is emitted only when set, and the importer tolerates bundles produced before they existed, so the shape is backward-compatible in both directions.
 
@@ -134,10 +134,11 @@ Both are optional. When absent the feature is fully disabled and all endpoints b
 
 ## Endpoints
 
-No new routes. The existing endpoints gain two optional parameters:
+No new routes. The existing endpoints gain three optional parameters:
 
 | Endpoint | Parameter | Effect |
 |----------|-----------|--------|
 | `GET /api/v1/repositories/{id}/findings` | `format=bundle` | JSON bundle instead of NDJSON |
 | `GET /api/v1/repositories/{id}/findings` | `encrypt=1` | Wrap bundle in armored age (requires `format=bundle`) |
+| `GET /api/v1/repositories/{id}/findings` | `scope=findings` | Curate the bundle to the Findings bucket, excluding scanner noise (requires `format=bundle`) |
 | `POST /api/v1/import` | *(none)* | Auto-detects age header and decrypts before parsing |

@@ -1021,6 +1021,49 @@ func TestOrgsList_countsImportedFindings(t *testing.T) {
 	}
 }
 
+// TestIndexTotals_countVulnScanFindings pins vuln-scan's inclusion in the
+// maintainers/orgs index aggregates: aliasedFindingsScanFilter was widened to
+// s.skill_name IN (?, ?) so vuln-scan findings count toward the cross-repo
+// totals alongside deep-dive, while scanner output stays excluded. It exercises
+// the second bound placeholder (vulnScanSkillName) in BOTH aggregate queries —
+// the path TestVulnScanBucketedAsFinding (repo bucket + /findings toggle) and
+// the import-count tests (first placeholder + kind='import') do not reach.
+func TestIndexTotals_countVulnScanFindings(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	// One owner + one maintainer on a single repo. Two vuln-scan findings count
+	// toward both index totals; a semgrep scanner finding stays out. A "2" badge
+	// is unambiguous (Repos column = 1) and separates the correct total from a
+	// regression: 0 if vuln-scan were treated as a scanner, 3 if semgrep leaked.
+	repo := db.Repository{URL: "https://example.com/acme/svc", Name: "svc", Owner: "acme"}
+	s.DB.Create(&repo)
+	vs := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: vulnScanSkillName}
+	s.DB.Create(&vs)
+	sg := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: "semgrep"}
+	s.DB.Create(&sg)
+	s.DB.Create(&db.Finding{ScanID: vs.ID, RepositoryID: repo.ID, Title: "vuln-scan a", Severity: "High"})
+	s.DB.Create(&db.Finding{ScanID: vs.ID, RepositoryID: repo.ID, Title: "vuln-scan b", Severity: "Medium"})
+	s.DB.Create(&db.Finding{ScanID: sg.ID, RepositoryID: repo.ID, Title: "scanner", Severity: "Low"})
+
+	alice := db.Maintainer{Login: "alice", Name: "Alice", Status: db.MaintainerActive}
+	s.DB.Create(&alice)
+	if err := s.DB.Model(&repo).Association("Maintainers").Append([]db.Maintainer{alice}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, path := range []string{"/maintainers", "/orgs"} {
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, localReq("GET", path))
+		if w.Code != 200 {
+			t.Fatalf("GET %s: status %d", path, w.Code)
+		}
+		if body := w.Body.String(); !strings.Contains(body, `<span class="badge-destructive">2</span>`) {
+			t.Errorf("GET %s: want vuln-scan findings total badge of 2 (semgrep excluded); body=%s", path, body)
+		}
+	}
+}
+
 func TestOrgsList_sortOptions(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()

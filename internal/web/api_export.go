@@ -45,6 +45,19 @@ func (s *Server) apiExportRepoFindings(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, "encrypt requires format=bundle")
 		return
 	}
+	// scope=findings curates the bundle to the Findings bucket (deep-dive,
+	// vuln-scan, imports), dropping per-repo scanner noise. Like encrypt it only
+	// applies to the bundle format; reject it elsewhere rather than silently
+	// returning the full set a caller asked to narrow.
+	scope := r.URL.Query().Get("scope")
+	if scope != "" && scope != "findings" {
+		writeAPIError(w, http.StatusBadRequest, "unsupported scope: findings")
+		return
+	}
+	if scope != "" && format != "bundle" {
+		writeAPIError(w, http.StatusBadRequest, "scope requires format=bundle")
+		return
+	}
 
 	id, _ := strconv.Atoi(r.PathValue("id"))
 	var repo db.Repository
@@ -123,6 +136,13 @@ func (s *Server) apiExportRepoBundle(w http.ResponseWriter, r *http.Request, rep
 	q := s.DB.Where("scan_id IN (?)",
 		s.DB.Model(&db.Scan{}).Select("id").Where("repository_id = ?", repo.ID)).
 		Order("id desc")
+	if r.URL.Query().Get("scope") == "findings" {
+		// Curate to the Findings bucket — drop semgrep/zizmor scanner noise,
+		// keep deep-dive, vuln-scan, and operator imports (nonScannerScanFilter,
+		// the same predicate the Findings tab uses). Validated in
+		// apiExportRepoFindings; the default (no scope) shares every finding.
+		q = q.Where(nonScannerScanFilter)
+	}
 	q = applyFindingFilters(q, r)
 	if err := q.Find(&findings).Error; err != nil {
 		writeAPIError(w, http.StatusInternalServerError, err.Error())
@@ -242,6 +262,12 @@ func validateExportFormat(w http.ResponseWriter, r *http.Request) bool {
 	// streaming plaintext NDJSON off these endpoints.
 	if r.URL.Query().Get("encrypt") != "" {
 		writeAPIError(w, http.StatusBadRequest, "encrypt is only supported on per-repository bundle exports")
+		return false
+	}
+	// scope curates the per-repository bundle and has no meaning on these
+	// cross-repo NDJSON dumps; reject it rather than silently ignore it.
+	if r.URL.Query().Get("scope") != "" {
+		writeAPIError(w, http.StatusBadRequest, "scope is only supported on per-repository bundle exports")
 		return false
 	}
 	return true

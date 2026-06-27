@@ -892,3 +892,136 @@ func TestImportLegacyBundle_minimalFieldsStillWork(t *testing.T) {
 		t.Errorf("legacy import should leave new columns empty: %+v", got)
 	}
 }
+
+// TestExportBundle_scopeFindingsCuratesScanners covers the opt-in bundle scope:
+// without scope the bundle still carries scanner output (non-breaking), and
+// scope=findings narrows it to the curated Findings bucket (nonScannerScanFilter)
+// so per-repo semgrep/zizmor noise is not shared.
+func TestExportBundle_scopeFindingsCuratesScanners(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	repo := db.Repository{URL: "https://example.com/scoped", Name: "scoped"}
+	s.DB.Create(&repo)
+	dd := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: deepDiveSkillName}
+	s.DB.Create(&dd)
+	sg := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: "semgrep"}
+	s.DB.Create(&sg)
+	s.DB.Create(&db.Finding{ScanID: dd.ID, RepositoryID: repo.ID, Title: "audit finding", Severity: sevHigh})
+	s.DB.Create(&db.Finding{ScanID: sg.ID, RepositoryID: repo.ID, Title: "semgrep noise", Severity: "Low"})
+
+	bundleTitles := func(qs string) []string {
+		r := httptest.NewRequest("GET", "/api/v1/repositories/"+strconv.FormatUint(uint64(repo.ID), 10)+"/findings?format=bundle"+qs, nil)
+		r.Host = testHost
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, r)
+		if w.Code != 200 {
+			t.Fatalf("GET bundle%s: status %d: %s", qs, w.Code, w.Body)
+		}
+		var b struct {
+			Findings []struct {
+				Title string `json:"title"`
+			} `json:"findings"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &b); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		titles := make([]string, 0, len(b.Findings))
+		for _, f := range b.Findings {
+			titles = append(titles, f.Title)
+		}
+		return titles
+	}
+
+	// Default: scanner output is still included (existing callers unaffected).
+	if got := bundleTitles(""); len(got) != 2 {
+		t.Errorf("default bundle = %v, want both audit + scanner findings", got)
+	}
+	// scope=findings: curate to the Findings bucket, dropping the semgrep noise.
+	if got := bundleTitles("&scope=findings"); len(got) != 1 || got[0] != "audit finding" {
+		t.Errorf("scope=findings bundle = %v, want [audit finding] only (semgrep dropped)", got)
+	}
+}
+
+// TestExportBundle_scopeRejected pins the validation: an unknown scope value, a
+// scope without format=bundle, and scope on the cross-repo endpoints all 400
+// rather than silently returning a wider set than the caller asked for.
+func TestExportBundle_scopeRejected(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	repo := seedFindings(t, s)
+	id := strconv.FormatUint(uint64(repo.ID), 10)
+
+	for _, tc := range []struct{ name, path string }{
+		{"unknown scope value", "/api/v1/repositories/" + id + "/findings?format=bundle&scope=bogus"},
+		{"scope without bundle", "/api/v1/repositories/" + id + "/findings?scope=findings"},
+		{"scope on global findings", "/api/v1/findings?scope=findings"},
+		{"scope on global scans", "/api/v1/scans?scope=findings"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest("GET", tc.path, nil)
+			r.Host = testHost
+			w := httptest.NewRecorder()
+			s.Handler().ServeHTTP(w, r)
+			if w.Code != 400 {
+				t.Fatalf("status %d, want 400; body=%s", w.Code, w.Body)
+			}
+			if !strings.Contains(w.Body.String(), "scope") {
+				t.Errorf("error should mention scope, got: %s", w.Body)
+			}
+		})
+	}
+}
+
+// TestExportBundle_scopeFindingsCuratesEncrypted confirms scope curation holds
+// on the encrypted path too: scope filters the finding query before the
+// plaintext/encrypt branch, so the scanner finding never reaches the ciphertext.
+func TestExportBundle_scopeFindingsCuratesEncrypted(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.EncRecipients = []age.Recipient{id.Recipient()}
+	s.EncIdentities = []age.Identity{id}
+
+	repo := db.Repository{URL: "https://example.com/enc-scoped", Name: "enc-scoped"}
+	s.DB.Create(&repo)
+	dd := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: deepDiveSkillName}
+	s.DB.Create(&dd)
+	sg := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: "semgrep"}
+	s.DB.Create(&sg)
+	s.DB.Create(&db.Finding{ScanID: dd.ID, RepositoryID: repo.ID, Title: "audit finding", Severity: sevHigh})
+	s.DB.Create(&db.Finding{ScanID: sg.ID, RepositoryID: repo.ID, Title: "semgrep noise", Severity: "Low"})
+
+	r := httptest.NewRequest("GET", "/api/v1/repositories/"+strconv.FormatUint(uint64(repo.ID), 10)+"/findings?format=bundle&encrypt=1&scope=findings", nil)
+	r.Host = testHost
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+
+	ar := armor.NewReader(bytes.NewReader(w.Body.Bytes()))
+	dr, err := age.Decrypt(ar, id)
+	if err != nil {
+		t.Fatalf("decrypt: %v", err)
+	}
+	plain, err := io.ReadAll(dr)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	var bundle struct {
+		Findings []struct {
+			Title string `json:"title"`
+		} `json:"findings"`
+	}
+	if err := json.Unmarshal(plain, &bundle); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(bundle.Findings) != 1 || bundle.Findings[0].Title != "audit finding" {
+		t.Errorf("encrypted scope=findings bundle = %+v, want [audit finding] only (semgrep dropped)", bundle.Findings)
+	}
+}
