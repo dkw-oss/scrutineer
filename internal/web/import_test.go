@@ -206,7 +206,7 @@ func TestImportFindings_skipsRevalidateWhenSkillAbsent(t *testing.T) {
 	}
 }
 
-func TestAutoEnqueueRevalidate_onlyHighAndCriticalFromDeepDive(t *testing.T) {
+func TestAutoEnqueueRevalidate_onlyHighAndCriticalFromLLMAudits(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()
 	repo := db.Repository{URL: "https://example.com/r", Name: "r"}
@@ -224,6 +224,9 @@ func TestAutoEnqueueRevalidate_onlyHighAndCriticalFromDeepDive(t *testing.T) {
 		{"deep-dive High", "security-deep-dive", "High", true},
 		{"deep-dive Medium", "security-deep-dive", "Medium", false},
 		{"deep-dive Low", "security-deep-dive", "Low", false},
+		{"vuln-scan Critical", "vuln-scan", "Critical", true},
+		{"vuln-scan High", "vuln-scan", "High", true},
+		{"vuln-scan Medium", "vuln-scan", "Medium", false},
 		{"semgrep High", "semgrep", "High", false},
 		{"zizmor Critical", "zizmor", "Critical", false},
 	}

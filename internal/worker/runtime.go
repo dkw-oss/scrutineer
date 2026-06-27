@@ -20,7 +20,7 @@ import (
 // --user uid:gid through /etc/subuid, so files written to bind mounts land as
 // the wrong host uid unless --userns=keep-id is set. docker and rootful podman
 // both run the container process as the host uid directly, so they need no
-// remap. The zero value is the docker runtime, so a bare DockerRunner{}
+// remap. The zero value is the docker runtime, so a bare ContainerRunner{}
 // (tests, RunnerImageName) keeps shelling out to "docker".
 type ContainerRuntime struct {
 	Bin      string // "docker" or "podman"; "" means docker
@@ -34,7 +34,7 @@ type ContainerRuntime struct {
 }
 
 // bin returns the executable name, defaulting to docker so the zero value
-// stays valid. Mirrors DockerRunner.image()'s empty-default pattern.
+// stays valid. Mirrors ContainerRunner.image()'s empty-default pattern.
 func (rt ContainerRuntime) bin() string {
 	if rt.Bin != "" {
 		return rt.Bin

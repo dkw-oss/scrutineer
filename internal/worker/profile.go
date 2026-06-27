@@ -292,7 +292,7 @@ func DetectProfile(ctx context.Context, rt ContainerRuntime, runnerImage, srcDir
 // deployment). The caller falls back to the default runner image.
 var ErrNoProfilesDir = errors.New("profiles dir not configured")
 
-// profileBuildLocks serialises `docker build` per image tag. Two scans
+// profileBuildLocks serialises the image build per tag. Two scans
 // that both detect the same profile must not race on the local image
 // cache. One mutex per tag avoids serialising builds of distinct
 // profiles.
@@ -369,12 +369,12 @@ func resolveBaseDigest(ctx context.Context, rt ContainerRuntime, runnerImage str
 	return hex.EncodeToString(sum[:])
 }
 
-// EnsureImage builds the profile's Docker image if it is not in the
-// local cache and returns the tag to pass to `docker run`. The
+// EnsureImage builds the profile's container image if it is not in the
+// local cache and returns the tag to pass to the runtime's `run`. The
 // `--build-arg RUNNER_IMAGE=...` is wired so the profile's FROM picks
 // up whichever runner image the operator configured. Concurrency-safe:
 // a per-tag mutex serialises duplicate builds. emit is called only on
-// a cache miss (before and after the docker build) so the scan log
+// a cache miss (before and after the image build) so the scan log
 // shows progress during a multi-minute first build.
 func (p Profile) EnsureImage(ctx context.Context, rt ContainerRuntime, profilesDir, runnerImage string, emit func(Event)) (string, error) {
 	if p.IsDefault() {

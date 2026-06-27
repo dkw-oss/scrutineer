@@ -71,9 +71,10 @@ func (s *Server) orgsList(w http.ResponseWriter, r *http.Request) {
 		}
 		var counts []c
 		// LEFT JOIN scans so the COUNT only includes the findings the Findings
-		// tab shows — the curated audit plus operator imports, via
-		// aliasedFindingsScanFilter. Tool-scanner output (zizmor, semgrep) is
-		// shown per-repo in the Scanners tab, not in cross-org totals.
+		// tab shows — the LLM audits (security-deep-dive, vuln-scan) plus
+		// operator imports, via aliasedFindingsScanFilter. Tool-scanner output
+		// (zizmor, semgrep) is shown per-repo in the Scanners tab, not in
+		// cross-org totals.
 		s.DB.Raw(`
 			SELECT r.owner, COUNT(f.id) AS n
 			FROM repositories r
@@ -82,7 +83,7 @@ func (s *Server) orgsList(w http.ResponseWriter, r *http.Request) {
 			WHERE r.owner != ''
 			  AND `+aliasedFindingsScanFilter+`
 			GROUP BY r.owner
-		`, deepDiveSkillName).Scan(&counts)
+		`, deepDiveSkillName, vulnScanSkillName).Scan(&counts)
 		for _, x := range counts {
 			findingCounts[x.Owner] = x.N
 		}

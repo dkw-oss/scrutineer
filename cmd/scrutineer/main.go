@@ -39,7 +39,7 @@ import (
 var commit string
 
 // buildCommit reports the commit scrutineer was built from. It prefers the
-// ldflags-injected value (set in the Docker build, where .git is excluded
+// ldflags-injected value (set in the container image build, where .git is excluded
 // from the context so the VCS stamp is unavailable) and otherwise reads the
 // vcs.revision the Go toolchain records during a normal local build.
 func buildCommit() string {
@@ -92,7 +92,7 @@ type flags struct {
 	dataDir          string
 	effort           string
 	defaultModel     string
-	noDocker         bool
+	noContainer      bool
 	runtime          string
 	selinux          string
 	hardened         bool
@@ -120,34 +120,42 @@ type flags struct {
 
 func parseFlags() *flags {
 	f := &flags{}
-	flag.StringVar(&f.configPath, "config", "", "path to YAML config file (default: ./scrutineer.yaml if present)")
-	flag.StringVar(&f.addr, "addr", "127.0.0.1:8080", "listen address")
-	flag.StringVar(&f.dataDir, "data", "./data", "data directory (db + workspaces)")
-	flag.StringVar(&f.effort, "effort", "high", "claude effort")
-	flag.StringVar(&f.runtime, "runtime", "docker", "container runtime: docker or podman (rootless podman supported)")
-	flag.StringVar(&f.selinux, "selinux", "auto", "SELinux bind-mount relabeling: auto (relabel when SELinux is detected on the host), on (always), off (never). Relabeling (\":z\") lets the container read /work and write its output on enforcing-SELinux hosts")
-	flag.BoolVar(&f.noDocker, "no-docker", false, "disable containerised runner even if a container runtime is available")
-	flag.BoolVar(&f.hardened, "hardened", false, "strict sandbox mode: container runtime required (no --no-docker fallback), egress restricted to *.anthropic.com + host skill API, read-only rootfs, internal network")
-	flag.BoolVar(&f.hardenedRootless, "hardened-rootless-runtime", false, "the non-network half of --hardened (read-only rootfs + no-new-privileges + 2 GiB post-clone workspace cap) WITHOUT the per-scan --internal network, so it works under rootless podman where --hardened cannot; --cap-drop ALL + non-root user + tmpfs apply regardless. Implied by --hardened")
-	flag.StringVar(&f.runnerImage, "runner-image", worker.DefaultRunnerImage, "docker image for per-job containers")
-	flag.StringVar(&f.profilesDir, "profiles-dir", "docker/profiles", "directory containing per-ecosystem runner profiles (Dockerfile per profile); empty disables profiles")
-	flag.StringVar(&f.skillsRepo, "skills-repo", "", "clone skills on startup; owner/repo[@ref] or https://host/path[@ref]")
-	flag.IntVar(&f.concurrency, "concurrency", queue.DefaultWorkerConcurrency, "number of scans to run in parallel")
-	flag.StringVar(&f.cloneMode, "clone", "shallow", "clone depth: shallow (--depth 1) or full")
-	flag.DurationVar(&f.scanTimeout, "scan-timeout", worker.DefaultScanTimeout, "wall-clock limit per scan")
-	flag.DurationVar(&f.smokeTimeout, "runtime-smoke-timeout", defaultRuntimeSmokeTimeout, "timeout for each rootless-podman startup container check (keep-id image remap, SELinux mount probe); raise if first-run image remapping is slow, lower if the image is pre-warmed")
-	flag.IntVar(&f.maxTurns, "max-turns", 0, "claude --max-turns limit (0 = unlimited)")
-	flag.StringVar(&f.anthropicBaseURL, "anthropic-base-url", "", "custom Anthropic API base URL (env: ANTHROPIC_BASE_URL)")
-	flag.StringVar(&f.forkOrg, "fork-org", "", "GitHub org the fork skill forks into and files draft advisories against")
-	flag.BoolVar(&f.schemaStrict, "schema-strict", false, "fail scans whose report.json does not validate against the skill's schema (default: warn and continue)")
-	flag.StringVar(&f.recipientsFile, "recipients-file", "", "age recipients file (public keys) for encrypted export")
-	flag.StringVar(&f.identityFile, "identity-file", "", "age identity file or SSH private key for decrypting imports")
-	flag.Var(&f.skillLocal, "skills", "directory to load SKILL.md files from (repeatable)")
+	registerFlags(flag.CommandLine, f)
 	flag.Parse()
 
 	f.set = make(map[string]bool)
 	flag.Visit(func(fl *flag.Flag) { f.set[fl.Name] = true })
 	return f
+}
+
+// registerFlags binds every CLI flag onto fs. Split out of parseFlags so a
+// test can parse a synthetic argv against a throwaway FlagSet -- in particular
+// to prove the deprecated --no-docker alias still maps onto noContainer.
+func registerFlags(fs *flag.FlagSet, f *flags) {
+	fs.StringVar(&f.configPath, "config", "", "path to YAML config file (default: ./scrutineer.yaml if present)")
+	fs.StringVar(&f.addr, "addr", "127.0.0.1:8080", "listen address")
+	fs.StringVar(&f.dataDir, "data", "./data", "data directory (db + workspaces)")
+	fs.StringVar(&f.effort, "effort", "high", "claude effort")
+	fs.StringVar(&f.runtime, "runtime", "docker", "container runtime: docker or podman (rootless podman supported)")
+	fs.StringVar(&f.selinux, "selinux", "auto", "SELinux bind-mount relabeling: auto (relabel when SELinux is detected on the host), on (always), off (never). Relabeling (\":z\") lets the container read /work and write its output on enforcing-SELinux hosts")
+	fs.BoolVar(&f.noContainer, "no-container", false, "disable the containerised runner and run claude directly on the host (no isolation), even if a container runtime is available")
+	fs.BoolVar(&f.noContainer, "no-docker", false, "deprecated alias for --no-container")
+	fs.BoolVar(&f.hardened, "hardened", false, "strict sandbox mode: container runtime required (no --no-container fallback), egress restricted to *.anthropic.com + host skill API, read-only rootfs, internal network")
+	fs.BoolVar(&f.hardenedRootless, "hardened-rootless-runtime", false, "the non-network half of --hardened (read-only rootfs + no-new-privileges + 2 GiB post-clone workspace cap) WITHOUT the per-scan --internal network, so it works under rootless podman where --hardened cannot; --cap-drop ALL + non-root user + tmpfs apply regardless. Implied by --hardened")
+	fs.StringVar(&f.runnerImage, "runner-image", worker.DefaultRunnerImage, "container image for per-job containers")
+	fs.StringVar(&f.profilesDir, "profiles-dir", "docker/profiles", "directory containing per-ecosystem runner profiles (Dockerfile per profile); empty disables profiles")
+	fs.StringVar(&f.skillsRepo, "skills-repo", "", "clone skills on startup; owner/repo[@ref] or https://host/path[@ref]")
+	fs.IntVar(&f.concurrency, "concurrency", queue.DefaultWorkerConcurrency, "number of scans to run in parallel")
+	fs.StringVar(&f.cloneMode, "clone", "shallow", "clone depth: shallow (--depth 1) or full")
+	fs.DurationVar(&f.scanTimeout, "scan-timeout", worker.DefaultScanTimeout, "wall-clock limit per scan")
+	fs.DurationVar(&f.smokeTimeout, "runtime-smoke-timeout", defaultRuntimeSmokeTimeout, "timeout for each rootless-podman startup container check (keep-id image remap, SELinux mount probe); raise if first-run image remapping is slow, lower if the image is pre-warmed")
+	fs.IntVar(&f.maxTurns, "max-turns", 0, "claude --max-turns limit (0 = unlimited)")
+	fs.StringVar(&f.anthropicBaseURL, "anthropic-base-url", "", "custom Anthropic API base URL (env: ANTHROPIC_BASE_URL)")
+	fs.StringVar(&f.forkOrg, "fork-org", "", "GitHub org the fork skill forks into and files draft advisories against")
+	fs.BoolVar(&f.schemaStrict, "schema-strict", false, "fail scans whose report.json does not validate against the skill's schema (default: warn and continue)")
+	fs.StringVar(&f.recipientsFile, "recipients-file", "", "age recipients file (public keys) for encrypted export")
+	fs.StringVar(&f.identityFile, "identity-file", "", "age identity file or SSH private key for decrypting imports")
+	fs.Var(&f.skillLocal, "skills", "directory to load SKILL.md files from (repeatable)")
 }
 
 // merge layers cfg underneath f: a config value applies only when the
@@ -166,8 +174,8 @@ func (f *flags) merge(cfg *config.Config) {
 	if cfg.Effort != "" && !f.set["effort"] {
 		f.effort = cfg.Effort
 	}
-	if cfg.NoDocker != nil && !f.set["no-docker"] {
-		f.noDocker = *cfg.NoDocker
+	if cfg.NoContainer != nil && !f.set["no-container"] && !f.set["no-docker"] {
+		f.noContainer = *cfg.NoContainer
 	}
 	if cfg.Runtime != "" && !f.set["runtime"] {
 		f.runtime = cfg.Runtime
@@ -325,7 +333,7 @@ func run(log *slog.Logger) error {
 	}
 
 	// Suppress claude-code's telemetry, error reporting, auto-updater and
-	// feedback command, and semgrep's metrics POST. The docker runner sets
+	// feedback command, and semgrep's metrics POST. The container runner sets
 	// these on the container too; setting them here covers the local
 	// runner, which inherits host env. The egress proxy already blocks the
 	// hosts these reach (DataDog log-intake, metrics.semgrep.dev) so
@@ -338,7 +346,7 @@ func run(log *slog.Logger) error {
 	}
 	// LocalClaude inherits the host env, so writing the resolved value
 	// back here is what makes flag/config precedence apply on the local
-	// runner path. DockerRunner gets it explicitly via its struct field.
+	// runner path. ContainerRunner gets it explicitly via its struct field.
 	if f.anthropicBaseURL != "" {
 		_ = os.Setenv("ANTHROPIC_BASE_URL", f.anthropicBaseURL)
 	}
@@ -532,23 +540,23 @@ func hashPath(s string) string {
 const defaultRuntimeSmokeTimeout = 5 * time.Minute
 
 // setupRunner picks the SkillRunner implementation for the run loop:
-// DockerRunner (docker or podman) when a container runtime is in use,
+// ContainerRunner (docker or podman) when a container runtime is in use,
 // LocalClaude otherwise. It also starts the egress proxy, sweeps stale hardened
 // networks, runs the rootless keep-id smoke test, and returns the apiBase the
 // worker advertises to skills (the container path rewrites it to
 // host.docker.internal so containers can reach the loopback-bound web server).
 //
-//nolint:ireturn // dispatched on f.noDocker; concrete types live in the worker pkg
+//nolint:ireturn // dispatched on f.noContainer; concrete types live in the worker pkg
 func setupRunner(f *flags, cfg *config.Config, log *slog.Logger) (worker.SkillRunner, string, error) {
 	apiBase := "http://" + f.addr + "/api"
-	if f.hardened && f.noDocker {
-		return nil, "", fmt.Errorf("--hardened requires a container runtime; remove --no-docker")
+	if f.hardened && f.noContainer {
+		return nil, "", fmt.Errorf("--hardened requires a container runtime; remove --no-container")
 	}
-	if f.hardenedRootless && f.noDocker {
-		log.Warn("--hardened-rootless-runtime has no effect with --no-docker (no container to harden)")
+	if f.hardenedRootless && f.noContainer {
+		log.Warn("--hardened-rootless-runtime has no effect with --no-container (no container to harden)")
 	}
-	if f.noDocker {
-		log.Info("--no-docker set, using local runner (no isolation)")
+	if f.noContainer {
+		log.Info("--no-container set, using local runner (no isolation)")
 		return worker.LocalClaude{Effort: f.effort, FullClone: f.fullClone(), MaxTurns: f.maxTurns}, apiBase, nil
 	}
 	rt, ok := worker.DetectRuntime(f.runtime)
@@ -556,7 +564,7 @@ func setupRunner(f *flags, cfg *config.Config, log *slog.Logger) (worker.SkillRu
 		if f.hardened {
 			return nil, "", fmt.Errorf("%s not available: --hardened requires a container runtime, install and start it", f.runtime)
 		}
-		return nil, "", fmt.Errorf("%s not available: install and start it, or pass --no-docker to run without containerisation (no isolation)", f.runtime)
+		return nil, "", fmt.Errorf("%s not available: install and start it, or pass --no-container to run without containerisation (no isolation)", f.runtime)
 	}
 	// Older podman lacks the host-gateway alias the egress path needs; warn
 	// rather than fail since the hardened path verifies reachability per-scan.
@@ -625,7 +633,7 @@ func setupRunner(f *flags, cfg *config.Config, log *slog.Logger) (worker.SkillRu
 	// Skills inside the container reach the host via host.docker.internal,
 	// which the egress proxy rewrites to 127.0.0.1 when dialing.
 	apiBase = "http://" + net.JoinHostPort(worker.HostGatewayAlias, addrPort(f.addr)) + "/api"
-	return worker.DockerRunner{
+	return worker.ContainerRunner{
 		Image:                   f.runnerImage,
 		Effort:                  f.effort,
 		ProxyURL:                worker.ProxyURL(token, port),

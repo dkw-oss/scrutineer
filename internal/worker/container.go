@@ -1,4 +1,4 @@
-// Package worker provides a DockerRunner that executes claude in an ephemeral
+// Package worker provides a ContainerRunner that executes claude in an ephemeral
 // container via a container runtime (docker or podman). Used when a runtime is
 // available on the host; falls back to LocalClaude otherwise. The scrutineer
 // process runs on the host (not containerised) and calls the runtime directly
@@ -20,11 +20,11 @@ import (
 
 const DefaultRunnerImage = "ghcr.io/alpha-omega-security/scrutineer-runner:latest"
 
-// DockerRunner launches claude inside an ephemeral container with the scan
+// ContainerRunner launches claude inside an ephemeral container with the scan
 // workspace (clone + staged skill + output file) mounted at /work. It drives
 // either docker or podman (selected via the Runtime field) and implements
 // SkillRunner.
-type DockerRunner struct {
+type ContainerRunner struct {
 	Image            string
 	Effort           string
 	ProxyURL         string // http://user:token@host.docker.internal:port; "" disables egress
@@ -56,7 +56,7 @@ type DockerRunner struct {
 	HardenedRootlessRuntime bool
 	// Runtime selects the OCI engine (docker or podman) and carries the
 	// rootless flag that gates --userns=keep-id. The zero value is docker, so
-	// a bare DockerRunner{} keeps shelling out to "docker".
+	// a bare ContainerRunner{} keeps shelling out to "docker".
 	Runtime ContainerRuntime
 	// SELinuxRelabel, when true, appends the ":z" relabel option to every host
 	// bind mount (/work, /claude-config, /src) so the container can access them
@@ -81,7 +81,7 @@ func hardenedNetworkName(scanID uint) string {
 	return fmt.Sprintf("%s%d", hardenedNetworkPrefix, scanID)
 }
 
-func (d DockerRunner) image() string {
+func (d ContainerRunner) image() string {
 	if d.Image != "" {
 		return d.Image
 	}
@@ -119,7 +119,7 @@ const HardenedWorkspaceCapBytes int64 = 2 << 30
 // /work read-write so claude can read the skill files and write its output.
 // Egress is routed through scrutineer's allowlisting proxy on the host;
 // see EgressProxy. tmpfs/cap-drop rules mirror the local runner's intent.
-func (d DockerRunner) RunSkill(ctx context.Context, sj SkillJob, emit func(Event)) (SkillResult, error) {
+func (d ContainerRunner) RunSkill(ctx context.Context, sj SkillJob, emit func(Event)) (SkillResult, error) {
 	var src string
 	if sj.SrcReady {
 		src = filepath.Join(sj.WorkRoot, "src")
@@ -168,7 +168,7 @@ func (d DockerRunner) RunSkill(ctx context.Context, sj SkillJob, emit func(Event
 			return SkillResult{Commit: commit, Profile: profile}, fmt.Errorf("create claude config dir: %w", err)
 		}
 	}
-	dockerBase := d.buildDockerArgs(absWork, image, hnet, absConfig)
+	runBase := d.buildRunArgs(absWork, image, hnet, absConfig)
 
 	logLine := "$ " + d.Runtime.bin() + " run --rm " + image + " <skill:" + sj.Name + ">"
 	if d.AnthropicBaseURL != "" {
@@ -183,7 +183,7 @@ func (d DockerRunner) RunSkill(ctx context.Context, sj SkillJob, emit func(Event
 		}
 		emit(e)
 	}
-	hitMaxTurns, sessionID, waitErr := d.runDockerOnce(ctx, dockerBase, sj, wrappedEmit)
+	hitMaxTurns, sessionID, waitErr := d.runContainerOnce(ctx, runBase, sj, wrappedEmit)
 
 	if waitErr != nil && sj.ResumeSessionID != "" && sessionID == "" && planLimitText == "" {
 		if sj.ResumePrompt != "" {
@@ -197,7 +197,7 @@ func (d DockerRunner) RunSkill(ctx context.Context, sj SkillJob, emit func(Event
 		emit(Event{Kind: KindText, Text: "resume of session " + sj.ResumeSessionID + " failed; restarting fresh"})
 		fresh := sj
 		fresh.ResumeSessionID = ""
-		hitMaxTurns, sessionID, waitErr = d.runDockerOnce(ctx, dockerBase, fresh, wrappedEmit)
+		hitMaxTurns, sessionID, waitErr = d.runContainerOnce(ctx, runBase, fresh, wrappedEmit)
 	}
 
 	res := SkillResult{Commit: commit, Profile: profile, SessionID: sessionID}
@@ -216,16 +216,16 @@ func (d DockerRunner) RunSkill(ctx context.Context, sj SkillJob, emit func(Event
 	return res, nil
 }
 
-// runDockerOnce launches one container for the given skill job, appending
-// the in-container `claude` command to dockerBase, streaming its output
+// runContainerOnce launches one container for the given skill job, appending
+// the in-container `claude` command to runBase, streaming its output
 // through emit, and reporting the wait error, whether the run hit the
 // max-turns cap, and the session id from the init event (empty when no init
 // event arrived, e.g. a --resume that could not find the conversation).
-func (d DockerRunner) runDockerOnce(ctx context.Context, dockerBase []string, sj SkillJob, emit func(Event)) (hitMaxTurns bool, sessionID string, waitErr error) {
+func (d ContainerRunner) runContainerOnce(ctx context.Context, runBase []string, sj SkillJob, emit func(Event)) (hitMaxTurns bool, sessionID string, waitErr error) {
 	claudeArgs := append([]string{"claude"}, buildClaudeArgs(sj, d.Effort, d.MaxTurns)...)
-	dockerArgs := append(append([]string{}, dockerBase...), claudeArgs...)
+	runArgs := append(append([]string{}, runBase...), claudeArgs...)
 
-	cmd := exec.CommandContext(ctx, d.Runtime.bin(), dockerArgs...)
+	cmd := exec.CommandContext(ctx, d.Runtime.bin(), runArgs...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Env = os.Environ()
 
@@ -235,7 +235,7 @@ func (d DockerRunner) runDockerOnce(ctx context.Context, dockerBase []string, sj
 	}
 	cmd.Stderr = cmd.Stdout
 	if err := cmd.Start(); err != nil {
-		return false, "", fmt.Errorf("start docker: %w", err)
+		return false, "", fmt.Errorf("start container: %w", err)
 	}
 
 	wrappedEmit := func(e Event) {
@@ -255,12 +255,12 @@ func (d DockerRunner) runDockerOnce(ctx context.Context, dockerBase []string, sj
 	return hitMaxTurns, sessionID, waitErr
 }
 
-// buildDockerArgs assembles the `docker run` flags for a skill invocation.
+// buildRunArgs assembles the container run flags for a skill invocation.
 // Returns the args up to and including the image name; the caller appends
 // the in-container command. Split out of RunSkill to keep its cognitive
 // complexity manageable as new toggles (hardened mode, proxy, profiles)
 // accumulate.
-func (d DockerRunner) buildDockerArgs(absWork, image string, hnet hardenedNet, claudeConfigDir string) []string {
+func (d ContainerRunner) buildRunArgs(absWork, image string, hnet hardenedNet, claudeConfigDir string) []string {
 	gwTarget := "host-gateway"
 	if d.Hardened {
 		// setupHardenedNetwork resolved the gateway once against this per-scan
@@ -345,6 +345,9 @@ func (d DockerRunner) buildDockerArgs(absWork, image string, hnet hardenedNet, c
 	} else if !d.Hardened {
 		args = append(args, "--network", "none")
 	}
+	// Forwarding the host Anthropic credential into the container is a known
+	// residual: in-container code (T1) can read it. Closing it needs proxy-side
+	// credential injection -- see threatmodel.md T1/T13.
 	if os.Getenv("ANTHROPIC_API_KEY") != "" {
 		args = append(args, "-e", "ANTHROPIC_API_KEY")
 	}
@@ -362,7 +365,7 @@ func (d DockerRunner) buildDockerArgs(absWork, image string, hnet hardenedNet, c
 // default image); when empty, scrutineer probes the clone with `brief`
 // to auto-select. Any failure along the way falls back to the default
 // image with a log line so a missing profile never blocks a scan.
-func (d DockerRunner) resolveProfile(ctx context.Context, requested, src, subPath string, emit func(Event)) (string, string) {
+func (d ContainerRunner) resolveProfile(ctx context.Context, requested, src, subPath string, emit func(Event)) (string, string) {
 	defaultImg := d.image()
 	if d.ProfilesDir == "" {
 		return "", defaultImg
@@ -398,7 +401,7 @@ func (d DockerRunner) resolveProfile(ctx context.Context, requested, src, subPat
 
 // profileGuideFileMode is the mode used when copying a profile's
 // PROFILE.md into the workspace as CLAUDE.md. The workspace already
-// belongs to the host user (the docker runner mounts it as that uid),
+// belongs to the host user (the container runner mounts it as that uid),
 // so a plain 0644 keeps it readable by the agent without surprises.
 const profileGuideFileMode os.FileMode = 0o644
 
@@ -406,7 +409,7 @@ const profileGuideFileMode os.FileMode = 0o644
 // cloned workspace exceeds HardenedWorkspaceCapBytes. It applies under both
 // --hardened and --hardened-rootless-runtime (the cap is a host-side size check,
 // not network-coupled), and is a no-op for plain default scans.
-func (d DockerRunner) checkHardenedWorkspace(workRoot string) error {
+func (d ContainerRunner) checkHardenedWorkspace(workRoot string) error {
 	if !d.Hardened && !d.HardenedRootlessRuntime {
 		return nil
 	}
@@ -426,7 +429,7 @@ func (d DockerRunner) checkHardenedWorkspace(workRoot string) error {
 // avoids Docker Desktop's refusal to materialise a sub-path mountpoint
 // inside another bind mount. No-ops when the profile has no guide;
 // failures are reported via emit but never block the scan.
-func (d DockerRunner) injectProfileGuide(profile, absWork string, emit func(Event)) {
+func (d ContainerRunner) injectProfileGuide(profile, absWork string, emit func(Event)) {
 	guide := d.profileGuidePath(profile)
 	if guide == "" {
 		return
@@ -449,7 +452,7 @@ func (d DockerRunner) injectProfileGuide(profile, absWork string, emit func(Even
 // for claude-code) so it's auto-loaded before the skill prompt runs.
 // The on-disk name stays agent-neutral to support a future codex runner
 // reading the same file as AGENTS.md.
-func (d DockerRunner) profileGuidePath(profile string) string {
+func (d ContainerRunner) profileGuidePath(profile string) string {
 	if profile == "" || d.ProfilesDir == "" {
 		return ""
 	}
@@ -514,7 +517,7 @@ func dirSize(root string) (int64, error) {
 	return total, err
 }
 
-// EnsureHardenedNetwork creates an internal docker network with the
+// EnsureHardenedNetwork creates an internal container network with the
 // given name if it does not already exist. --internal blocks routes
 // to external networks; the container can still reach the host via
 // the bridge gateway, so the egress proxy on the host remains the only
@@ -534,7 +537,7 @@ func EnsureHardenedNetwork(rt ContainerRuntime, name string) error {
 
 // hardenedNet bundles a per-scan --internal network name with the host-gateway
 // IPv4 resolved against it. setupHardenedNetwork resolves the gateway once and
-// threads it through both verifyHardenedNetwork and buildDockerArgs, so a
+// threads it through both verifyHardenedNetwork and buildRunArgs, so a
 // hardened scan probes for it a single time instead of once per consumer. The
 // zero value (both fields "") is the non-hardened case.
 type hardenedNet struct {
@@ -549,7 +552,7 @@ type hardenedNet struct {
 // the network. Outside hardened mode it is a no-op with a zero hardenedNet and a
 // no-op cleanup. On any error the network it created (if any) is already torn
 // down, so the returned cleanup is always safe to defer.
-func (d DockerRunner) setupHardenedNetwork(sj SkillJob, image string) (hardenedNet, func(), error) {
+func (d ContainerRunner) setupHardenedNetwork(sj SkillJob, image string) (hardenedNet, func(), error) {
 	noop := func() {}
 	if !d.Hardened {
 		return hardenedNet{}, noop, nil
@@ -591,7 +594,7 @@ func (d DockerRunner) setupHardenedNetwork(sj SkillJob, image string) (hardenedN
 //
 // Any probe that cannot even run (image won't start, curl missing) is treated
 // as a failure: the runner must never fall back to a weaker sandbox silently.
-func (d DockerRunner) verifyHardenedNetwork(hn hardenedNet, image string) error {
+func (d ContainerRunner) verifyHardenedNetwork(hn hardenedNet, image string) error {
 	network := hn.name
 	gwTarget := "host-gateway"
 	if hn.gatewayIP != "" {
@@ -666,9 +669,9 @@ func proxyPortFromURL(proxyURL string) (string, error) {
 	return u.Port(), nil
 }
 
-// SweepOrphanHardenedNetworks removes per-scan hardened docker networks
+// SweepOrphanHardenedNetworks removes per-scan hardened networks
 // left over by previous scrutineer processes (typically after a crash
-// mid-scan). Docker refuses to remove a network that still has
+// mid-scan). The runtime refuses to remove a network that still has
 // containers attached, so a concurrently running scan from another
 // scrutineer instance is safe from this sweep. Returns the number of
 // networks actually removed; rm failures are intentionally swallowed
@@ -690,7 +693,7 @@ func SweepOrphanHardenedNetworks(rt ContainerRuntime) (int, error) {
 }
 
 // parseHardenedNetworkNames extracts strict-prefix matches from the
-// output of `docker network ls --format {{.Name}}`. Docker's --filter
+// output of the runtime's `network ls --format {{.Name}}`. Its --filter
 // name= is a substring match, so we re-check the prefix here to avoid
 // touching a user-named network that happens to contain the substring.
 func parseHardenedNetworkNames(out []byte) []string {

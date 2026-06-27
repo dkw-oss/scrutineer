@@ -33,9 +33,9 @@ Click **Add repository** in the sidebar, paste a git HTTPS URL, and scrutineer e
 
 To onboard a whole GitHub org at once, open **Add multiple** → **Import a whole org** and enter the org (or user) login. Scrutineer fetches every repository and queues each one with the default scan set, skipping forks and archived repos unless you opt in. Duplicates already in the database are skipped. Set `GITHUB_TOKEN` to raise GitHub's unauthenticated rate limit when importing large orgs.
 
-You can also scan a directory on disk, useful before pushing, or for code not hosted on a git forge. Paste an absolute path (`/path/to/project`) in the same **Add repository** field. Scrutineer copies the directory into a per-scan workspace and runs the default skill set; skills that need a forge URL or ecosyste.ms enrichment (`advisories`, `dependents`, `exposure`, `fork`, `maintainers`, `metadata`, `packages`, `public-issue`, `report-upstream`) are skipped automatically. Symlinks are recreated as-is rather than dereferenced during the copy; in Docker mode their targets then resolve inside the container, so host files reached only through such a link are not visible to skills. Without Docker the kernel dereferences them normally, so only point scrutineer at trees you trust.
+You can also scan a directory on disk, useful before pushing, or for code not hosted on a git forge. Paste an absolute path (`/path/to/project`) in the same **Add repository** field. Scrutineer copies the directory into a per-scan workspace and runs the default skill set; skills that need a forge URL or ecosyste.ms enrichment (`advisories`, `dependents`, `exposure`, `fork`, `maintainers`, `metadata`, `packages`, `public-issue`, `report-upstream`) are skipped automatically. Symlinks are recreated as-is rather than dereferenced during the copy; in container mode their targets then resolve inside the container, so host files reached only through such a link are not visible to skills. Under `--no-container` the kernel dereferences them normally, so only point scrutineer at trees you trust.
 
-The optional analysis tools (semgrep, zizmor, git-pkgs, brief) are bundled in the runner image, so you don't need them installed locally when Docker is in use.
+The optional analysis tools (semgrep, zizmor, git-pkgs, brief) are bundled in the runner image, so you don't need them installed locally when the container runner is in use.
 
 ## Git authentication
 
@@ -56,7 +56,7 @@ Common setups:
 
 When running inside Docker (`docker run ...`), the container has no access to host credentials. Mount a credential store or set `GIT_ASKPASS` to provide access to private repos from inside the container.
 
-When the containerised runner is active (the default when Docker is available), each scan runs in a separate container but the clone happens on the host before the source is mounted in. Host credentials are used for the clone; the container never sees them.
+When the containerised runner is active (the default when a container runtime is available), each scan runs in a separate container but the clone happens on the host before the source is mounted in. Host credentials are used for the clone; the container never sees them.
 
 ## Features
 
@@ -99,7 +99,7 @@ When the containerised runner is active (the default when Docker is available), 
 
 ### Operational
 
-- **Containerised runner** -- optional per-scan Docker isolation with read-only source mounts, dropped capabilities, and an authenticated egress allowlist proxy
+- **Containerised runner** -- optional per-scan container isolation with read-only source mounts, dropped capabilities, and an authenticated egress allowlist proxy
 - **Skill HTTP API** -- running skills can call back into scrutineer to list prior scans and enqueue further skills; surface documented in `openapi.yaml`
 - **Live updates** -- SSE streaming of scan logs and status changes, no polling
 - **Organisation rollup** -- repos, findings, and maintainers grouped by owning org, with per-org markdown exports
@@ -213,14 +213,14 @@ If a container runtime (docker or rootless podman) is available on the host, scr
 
     go run ./cmd/scrutineer -skills ./skills
 
-Use `--runtime podman` to run scans under podman instead of docker (see [Podman (rootless)](#podman-rootless) below), `--no-docker` to disable containerised execution entirely, or `--runner-image` to specify a different image. To build the runner locally instead of pulling from GHCR (use `podman build` instead if you run scans under podman):
+Use `--runtime podman` to run scans under podman instead of docker (see [Podman (rootless)](#podman-rootless) below), `--no-container` to disable containerised execution entirely, or `--runner-image` to specify a different image. To build the runner locally instead of pulling from GHCR (use `podman build` instead if you run scans under podman):
 
     docker build -t scrutineer-runner -f Dockerfile.runner .
     go run ./cmd/scrutineer -skills ./skills --runner-image scrutineer-runner
 
 When the container runner is active, scrutineer starts an authenticated egress proxy on the host and points `HTTPS_PROXY`/`HTTP_PROXY` inside the container at it. The proxy only tunnels to an allowlist of hosts: the Anthropic API, `*.ecosyste.ms`, the major forges (GitHub, GitLab, Codeberg, Bitbucket), common package registries (npm, PyPI, RubyGems, crates.io, Go module proxy, Packagist, Hex, NuGet), advisory sources (semgrep.dev, OSV, NVD, cwe.mitre.org), and `host.docker.internal` for the local skill API. Requests to anything else get a 403 and are logged. Extend the list with `egress_allow` in the config file. When `-anthropic-base-url` is set (or falls back to the `ANTHROPIC_BASE_URL` env var), its hostname is automatically added to the allowlist. The proxy uses a per-process random token so it isn't an open relay; tools that ignore the proxy env are not blocked at the network layer (see `threatmodel.md`).
 
-For deployments that treat skill prompts as untrusted, pass `--hardened` (or `hardened: true` in the config). The flag forces the container runner (`--no-docker` is rejected), trims the egress allowlist to `*.anthropic.com` plus the host skill API (so `egress_allow` is ignored, drop the flag if you need to widen it), mounts the container rootfs read-only with `no-new-privileges`, attaches each scan to its own ephemeral network created with `--internal` (removed when the scan ends) so a process that ignores `HTTPS_PROXY` has no route out and concurrent scans cannot reach each other, and refuses scans whose workspace footprint exceeds 2 GiB once the clone completes. The 2 GiB check is post-clone: it bounds what hardened mode will agree to scan, not what can land on disk during the clone itself; use OS-level disk quotas if you need a clone-time guarantee. Bundled skills that hit ecosyste.ms or a package registry directly will fail under hardened mode unless they route through the host skill API. Per-ecosystem runner profiles still apply, but profile images that need writable paths beyond `/work` and `/tmp` are incompatible. Under podman, each hardened scan first verifies its `--internal` network actually blocks external egress while still reaching the host proxy, and refuses the scan if that cannot be confirmed, so the sandbox never silently weakens.
+For deployments that treat skill prompts as untrusted, pass `--hardened` (or `hardened: true` in the config). The flag forces the container runner (`--no-container` is rejected), trims the egress allowlist to `*.anthropic.com` plus the host skill API (so `egress_allow` is ignored, drop the flag if you need to widen it), mounts the container rootfs read-only with `no-new-privileges`, attaches each scan to its own ephemeral network created with `--internal` (removed when the scan ends) so a process that ignores `HTTPS_PROXY` has no route out and concurrent scans cannot reach each other, and refuses scans whose workspace footprint exceeds 2 GiB once the clone completes. The 2 GiB check is post-clone: it bounds what hardened mode will agree to scan, not what can land on disk during the clone itself; use OS-level disk quotas if you need a clone-time guarantee. Bundled skills that hit ecosyste.ms or a package registry directly will fail under hardened mode unless they route through the host skill API. Per-ecosystem runner profiles still apply, but profile images that need writable paths beyond `/work` and `/tmp` are incompatible. Under podman, each hardened scan first verifies its `--internal` network actually blocks external egress while still reaching the host proxy, and refuses the scan if that cannot be confirmed, so the sandbox never silently weakens.
 
 ## Podman (rootless)
 
@@ -249,7 +249,7 @@ The `docker build` / `docker run` commands shown in this repo -- for the runner 
 | `-skills-repo` | - | `owner/repo[@ref]` or git HTTPS URL `https://host/path[@ref]` to clone skills from on startup; `@ref` pins a branch, tag or commit and the resolved SHA is recorded on every scan |
 | `--runtime` | `docker` | Container runtime: `docker` or `podman` (rootless podman supported) |
 | `--selinux` | `auto` | Bind-mount SELinux relabeling: `auto` (relabel when SELinux is detected), `on`, or `off` |
-| `--no-docker` | false | Disable containerised runner |
+| `--no-container` | false | Disable the containerised runner; run claude directly on the host (no isolation). Deprecated alias: `--no-docker` |
 | `--hardened` | false | Strict sandbox: container runtime required, egress restricted to `*.anthropic.com` + host skill API, read-only rootfs, internal network |
 | `--hardened-rootless-runtime` | false | The non-network half of `--hardened` (read-only rootfs + `no-new-privileges` + 2 GiB workspace cap) **without** the per-scan `--internal` network; works under rootless podman where `--hardened` can't (implied by `--hardened`) |
 | `--runner-image` | `ghcr.io/alpha-omega-security/scrutineer-runner:latest` | Container image for per-scan containers |
@@ -277,11 +277,11 @@ Scrutineer resolves skill models through tiers. Skills default to the `high` tie
 
 ## Sandboxed Claude Code configs
 
-In `--no-docker` mode the `claude` subprocess inherits your `~/.claude/settings.json`, so [sandbox settings](https://code.claude.com/docs/en/sandboxing) that restrict network or filesystem access there will fail skills that need them. Point `claude` at a separate config directory just for scrutineer runs:
+In `--no-container` mode the `claude` subprocess inherits your `~/.claude/settings.json`, so [sandbox settings](https://code.claude.com/docs/en/sandboxing) that restrict network or filesystem access there will fail skills that need them. Point `claude` at a separate config directory just for scrutineer runs:
 
     CLAUDE_CONFIG_DIR=~/.claude-scrutineer go run ./cmd/scrutineer -skills ./skills
 
-Copy your `settings.json` into that directory and drop the sandbox keys; your normal Claude Code config is untouched. Docker mode is not affected: `claude` runs inside the container with its own environment regardless of the host config.
+Copy your `settings.json` into that directory and drop the sandbox keys; your normal Claude Code config is untouched. Container mode is not affected: `claude` runs inside the container with its own environment regardless of the host config.
 
 ## Security
 

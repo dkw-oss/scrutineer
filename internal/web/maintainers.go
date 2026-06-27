@@ -59,9 +59,10 @@ func (s *Server) maintainersList(w http.ResponseWriter, r *http.Request) {
 		}
 		var counts []row
 		// LEFT JOIN scans so the COUNT only includes the findings the Findings
-		// tab shows — the deep-dive audit plus operator imports, via
-		// aliasedFindingsScanFilter. Scanner output (zizmor, semgrep) is
-		// per-repo lint noise and shouldn't drive maintainer routing.
+		// tab shows — the LLM audits (security-deep-dive, vuln-scan) plus
+		// operator imports, via aliasedFindingsScanFilter. Scanner output
+		// (zizmor, semgrep) is per-repo lint noise and shouldn't drive
+		// maintainer routing.
 		s.DB.Raw(`
 			SELECT rm.maintainer_id, COUNT(f.id) AS n
 			FROM repository_maintainers rm
@@ -70,7 +71,7 @@ func (s *Server) maintainersList(w http.ResponseWriter, r *http.Request) {
 			WHERE rm.maintainer_id IN ?
 			  AND `+aliasedFindingsScanFilter+`
 			GROUP BY rm.maintainer_id
-		`, ids, deepDiveSkillName).Scan(&counts)
+		`, ids, deepDiveSkillName, vulnScanSkillName).Scan(&counts)
 		for _, c := range counts {
 			findingCounts[c.MaintainerID] = c.N
 		}

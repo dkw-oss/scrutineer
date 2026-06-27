@@ -11,10 +11,10 @@ import (
 	"testing"
 )
 
-func TestBuildDockerArgs_ClaudeConfigMount(t *testing.T) {
-	d := DockerRunner{}
+func TestBuildRunArgs_ClaudeConfigMount(t *testing.T) {
+	d := ContainerRunner{}
 
-	with := d.buildDockerArgs("/work/abs", "img:latest", hardenedNet{}, "/data/claude-config/scan-7")
+	with := d.buildRunArgs("/work/abs", "img:latest", hardenedNet{}, "/data/claude-config/scan-7")
 	if !hasAdjacent(with, "-v", "/data/claude-config/scan-7:/claude-config") {
 		t.Errorf("expected the config dir bind mount in %v", with)
 	}
@@ -23,7 +23,7 @@ func TestBuildDockerArgs_ClaudeConfigMount(t *testing.T) {
 	}
 
 	// No config dir → no mount and no env, so default scans are unchanged.
-	without := d.buildDockerArgs("/work/abs", "img:latest", hardenedNet{}, "")
+	without := d.buildRunArgs("/work/abs", "img:latest", hardenedNet{}, "")
 	for _, a := range without {
 		if strings.Contains(a, "/claude-config") || strings.HasPrefix(a, "CLAUDE_CONFIG_DIR=") {
 			t.Errorf("did not expect any claude-config args, got %q in %v", a, without)
@@ -31,22 +31,22 @@ func TestBuildDockerArgs_ClaudeConfigMount(t *testing.T) {
 	}
 }
 
-func TestBuildDockerArgs_KeepIDGating(t *testing.T) {
+func TestBuildRunArgs_KeepIDGating(t *testing.T) {
 	// --userns=keep-id is the rootless-podman bind-mount ownership fix. It must
 	// appear ONLY for rootless podman; docker and rootful podman stay byte-for-
 	// byte as before (no --userns token at all), so this also guards against a
-	// regression that would silently alter the docker arg vector.
-	rootless := DockerRunner{Runtime: ContainerRuntime{Bin: "podman", Rootless: true}}
-	if got := rootless.buildDockerArgs("/work/abs", "img:latest", hardenedNet{}, ""); !slices.Contains(got, "--userns=keep-id") {
+	// regression that would silently alter the container arg vector.
+	rootless := ContainerRunner{Runtime: ContainerRuntime{Bin: "podman", Rootless: true}}
+	if got := rootless.buildRunArgs("/work/abs", "img:latest", hardenedNet{}, ""); !slices.Contains(got, "--userns=keep-id") {
 		t.Errorf("rootless podman: expected --userns=keep-id in %v", got)
 	}
 
-	for _, d := range []DockerRunner{
+	for _, d := range []ContainerRunner{
 		{}, // docker (zero value)
 		{Runtime: ContainerRuntime{Bin: "docker"}},
 		{Runtime: ContainerRuntime{Bin: "podman"}}, // rootful podman
 	} {
-		got := d.buildDockerArgs("/work/abs", "img:latest", hardenedNet{}, "")
+		got := d.buildRunArgs("/work/abs", "img:latest", hardenedNet{}, "")
 		for _, a := range got {
 			if strings.HasPrefix(a, "--userns") {
 				t.Errorf("runtime %+v: unexpected %q in %v", d.Runtime, a, got)
@@ -56,7 +56,7 @@ func TestBuildDockerArgs_KeepIDGating(t *testing.T) {
 
 	// Rootless podman with a resume config dir keeps BOTH the mount and keep-id
 	// so the persisted session store stays host-owned across container restarts.
-	withCfg := rootless.buildDockerArgs("/work/abs", "img:latest", hardenedNet{}, "/data/cfg/scan-1")
+	withCfg := rootless.buildRunArgs("/work/abs", "img:latest", hardenedNet{}, "/data/cfg/scan-1")
 	if !slices.Contains(withCfg, "--userns=keep-id") {
 		t.Errorf("rootless+config: expected --userns=keep-id in %v", withCfg)
 	}
@@ -65,11 +65,11 @@ func TestBuildDockerArgs_KeepIDGating(t *testing.T) {
 	}
 }
 
-func TestBuildDockerArgs_SELinuxRelabel(t *testing.T) {
+func TestBuildRunArgs_SELinuxRelabel(t *testing.T) {
 	// With relabeling on, every host bind mount must carry the ":z" shared
 	// relabel so the container can access it on an SELinux host.
-	on := DockerRunner{SELinuxRelabel: true}
-	got := on.buildDockerArgs("/work/abs", "img:latest", hardenedNet{}, "/data/cfg/scan-1")
+	on := ContainerRunner{SELinuxRelabel: true}
+	got := on.buildRunArgs("/work/abs", "img:latest", hardenedNet{}, "/data/cfg/scan-1")
 	if !hasAdjacent(got, "-v", "/work/abs:/work:z") {
 		t.Errorf("expected /work mount relabeled with :z in %v", got)
 	}
@@ -79,8 +79,8 @@ func TestBuildDockerArgs_SELinuxRelabel(t *testing.T) {
 
 	// With relabeling off (the zero value / default), mounts are byte-for-byte
 	// unchanged -- no :z anywhere -- so non-SELinux hosts are unaffected.
-	off := DockerRunner{}
-	got = off.buildDockerArgs("/work/abs", "img:latest", hardenedNet{}, "/data/cfg/scan-1")
+	off := ContainerRunner{}
+	got = off.buildRunArgs("/work/abs", "img:latest", hardenedNet{}, "/data/cfg/scan-1")
 	if !hasAdjacent(got, "-v", "/work/abs:/work") {
 		t.Errorf("expected unrelabeled /work mount in %v", got)
 	}
@@ -94,7 +94,7 @@ func TestBuildDockerArgs_SELinuxRelabel(t *testing.T) {
 	}
 }
 
-func TestBuildDockerArgs_ContainerHardening(t *testing.T) {
+func TestBuildRunArgs_ContainerHardening(t *testing.T) {
 	user := fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid())
 	const tmpfs = "/tmp:rw,noexec,nosuid,size=256m"
 	const net = "scrutineer-hardened-9"
@@ -104,7 +104,7 @@ func TestBuildDockerArgs_ContainerHardening(t *testing.T) {
 	// --hardened-rootless-runtime: read-only + no-new-privileges, but NOT the
 	// per-scan --internal network -- that network is the part rootless podman
 	// can't route to the host proxy, and is the whole reason this flag exists.
-	roR := DockerRunner{HardenedRootlessRuntime: true}.buildDockerArgs("/work/abs", "img:latest", hardenedNet{name: net}, "")
+	roR := ContainerRunner{HardenedRootlessRuntime: true}.buildRunArgs("/work/abs", "img:latest", hardenedNet{name: net}, "")
 	if !slices.Contains(roR, "--read-only") || !hasNoNewPrivs(roR) {
 		t.Errorf("hardened-rootless-runtime: expected --read-only + no-new-privileges in %v", roR)
 	}
@@ -113,7 +113,7 @@ func TestBuildDockerArgs_ContainerHardening(t *testing.T) {
 	}
 
 	// --hardened: the container hardening AND the per-scan network.
-	h := DockerRunner{Hardened: true}.buildDockerArgs("/work/abs", "img:latest", hardenedNet{name: net}, "")
+	h := ContainerRunner{Hardened: true}.buildRunArgs("/work/abs", "img:latest", hardenedNet{name: net}, "")
 	if !slices.Contains(h, "--read-only") || !hasNoNewPrivs(h) {
 		t.Errorf("hardened: expected --read-only + no-new-privileges in %v", h)
 	}
@@ -131,15 +131,15 @@ func TestBuildDockerArgs_ContainerHardening(t *testing.T) {
 	}
 
 	// Default mode: neither container-hardening option (byte-for-byte unchanged).
-	def := DockerRunner{}.buildDockerArgs("/work/abs", "img:latest", hardenedNet{}, "")
+	def := ContainerRunner{}.buildRunArgs("/work/abs", "img:latest", hardenedNet{}, "")
 	if slices.Contains(def, "--read-only") || hasNoNewPrivs(def) {
 		t.Errorf("default mode must set neither --read-only nor no-new-privileges: %v", def)
 	}
 
 	// The baseline -- --cap-drop ALL, non-root --user, the /tmp tmpfs -- is
 	// present in EVERY mode; the new flag must not disturb that invariant.
-	for _, mode := range []DockerRunner{{}, {HardenedRootlessRuntime: true}, {Hardened: true}} {
-		args := mode.buildDockerArgs("/work/abs", "img:latest", hardenedNet{name: net}, "")
+	for _, mode := range []ContainerRunner{{}, {HardenedRootlessRuntime: true}, {Hardened: true}} {
+		args := mode.buildRunArgs("/work/abs", "img:latest", hardenedNet{name: net}, "")
 		if !hasAdjacent(args, "--cap-drop", "ALL") {
 			t.Errorf("%+v: missing --cap-drop ALL: %v", mode, args)
 		}
@@ -155,7 +155,7 @@ func TestBuildDockerArgs_ContainerHardening(t *testing.T) {
 func TestCheckHardenedWorkspace_GatedOnHardeningFlags(t *testing.T) {
 	// A small real workspace is under the cap, so every mode passes.
 	small := t.TempDir()
-	for _, d := range []DockerRunner{{}, {HardenedRootlessRuntime: true}, {Hardened: true}} {
+	for _, d := range []ContainerRunner{{}, {HardenedRootlessRuntime: true}, {Hardened: true}} {
 		if err := d.checkHardenedWorkspace(small); err != nil {
 			t.Errorf("%+v: small workspace should pass: %v", d, err)
 		}
@@ -166,19 +166,19 @@ func TestCheckHardenedWorkspace_GatedOnHardeningFlags(t *testing.T) {
 	// while a no-op returns nil -- a cheap way to assert the gating without
 	// building a 2 GiB tree. This is the cap being folded into rootless hardening.
 	missing := filepath.Join(t.TempDir(), "gone")
-	if err := (DockerRunner{}).checkHardenedWorkspace(missing); err != nil {
+	if err := (ContainerRunner{}).checkHardenedWorkspace(missing); err != nil {
 		t.Errorf("default mode must be a no-op, got %v", err)
 	}
-	if err := (DockerRunner{HardenedRootlessRuntime: true}).checkHardenedWorkspace(missing); err == nil {
+	if err := (ContainerRunner{HardenedRootlessRuntime: true}).checkHardenedWorkspace(missing); err == nil {
 		t.Error("--hardened-rootless-runtime must run the workspace cap check")
 	}
-	if err := (DockerRunner{Hardened: true}).checkHardenedWorkspace(missing); err == nil {
+	if err := (ContainerRunner{Hardened: true}).checkHardenedWorkspace(missing); err == nil {
 		t.Error("--hardened must run the workspace cap check")
 	}
 }
 
 // hasAdjacent reports whether args contains flag immediately followed by val,
-// matching how docker run takes `-v host:container` / `-e KEY=VAL` pairs.
+// matching how a container `run` takes `-v host:container` / `-e KEY=VAL` pairs.
 func hasAdjacent(args []string, flag, val string) bool {
 	for i := 0; i+1 < len(args); i++ {
 		if args[i] == flag && args[i+1] == val {
@@ -240,7 +240,7 @@ func TestHardenedNetworkName_UniquePerScanID(t *testing.T) {
 }
 
 func TestParseHardenedNetworkNames_KeepsStrictPrefixOnly(t *testing.T) {
-	// Docker's --filter name= is a substring match, so output can include
+	// The runtime's --filter name= is a substring match, so output can include
 	// false positives like a user-named "my-scrutineer-hardened-net". The
 	// parser must keep only names that start with the strict prefix.
 	in := []byte("\nscrutineer-hardened-1\nscrutineer-hardened-42\nmy-scrutineer-hardened-net\n  \nbridge\n")
@@ -264,12 +264,12 @@ func TestRunSkill_HardenedRefusesZeroScanID(t *testing.T) {
 	// The per-scan network name embeds ScanID. A zero ID collapses every
 	// hardened scan onto scrutineer-hardened-0, which silently defeats
 	// isolation -- the whole property this code path adds. Guard must
-	// fire before any docker invocation.
+	// fire before any container invocation.
 	work := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(work, "src"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	d := DockerRunner{Hardened: true}
+	d := ContainerRunner{Hardened: true}
 	sj := SkillJob{
 		WorkRoot: work,
 		Name:     "noop",
@@ -375,7 +375,7 @@ func TestRedactURLUserinfo(t *testing.T) {
 }
 
 func TestResolveProfile_SubPath(t *testing.T) {
-	d := DockerRunner{ProfilesDir: t.TempDir()} // Provide a ProfilesDir so it doesn't short-circuit
+	d := ContainerRunner{ProfilesDir: t.TempDir()} // Provide a ProfilesDir so it doesn't short-circuit
 
 	work := t.TempDir()
 	sub := filepath.Join(work, "nested", "php-ext")

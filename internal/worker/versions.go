@@ -9,9 +9,9 @@ import (
 
 // RunnerImageName returns the container image the given runner uses for scans,
 // or "" when the runner is not container-backed (e.g. LocalClaude under
-// --no-docker), where there is no fixed image to interrogate.
+// --no-container), where there is no fixed image to interrogate.
 func RunnerImageName(r SkillRunner) string {
-	if d, ok := r.(DockerRunner); ok {
+	if d, ok := r.(ContainerRunner); ok {
 		return d.image()
 	}
 	return ""
@@ -19,10 +19,10 @@ func RunnerImageName(r SkillRunner) string {
 
 // RuntimeOf returns the container runtime the given runner uses, or the docker
 // zero value when the runner is not container-backed (LocalClaude under
-// --no-docker). The web settings page passes it to the version probes so a
+// --no-container). The web settings page passes it to the version probes so a
 // podman host queries podman rather than a non-existent docker daemon.
 func RuntimeOf(r SkillRunner) ContainerRuntime {
-	if d, ok := r.(DockerRunner); ok {
+	if d, ok := r.(ContainerRunner); ok {
 		return d.Runtime
 	}
 	return ContainerRuntime{}

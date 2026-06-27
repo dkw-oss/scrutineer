@@ -22,7 +22,7 @@ changes *how strongly* that boundary holds, not what runs inside it.
 
 Three configurations exist, weakest to strongest:
 
-- `--no-docker` — no container; the workload runs on the host as the operator.
+- `--no-container` — no container; the workload runs on the host as the operator.
   Least isolation (unchanged, out of scope for this document).
 - `--runtime docker` *(default)* or rootful podman — container-root maps to a
   uid the daemon runs as; the daemon/socket is root-equivalent.
@@ -147,7 +147,7 @@ It is the recommended add-on for rootless deployments that can't use full
 `--hardened`. It is not strictly rootless-specific — it works under docker and
 rootful podman too — but `--hardened` already implies all of it there, so the
 flag is redundant with (and harmless alongside) `--hardened`. It has no effect
-under `--no-docker` (there is no container; startup warns if you combine them),
+under `--no-container` (there is no container; startup warns if you combine them),
 and startup logs `hardened_rootless_runtime=<bool>` so you can confirm it is
 active.
 

@@ -51,10 +51,12 @@
 # test verifies a real relabeled mount works. See docs/podman.md.
 # selinux: auto
 
-# Disable the container runner even if a runtime is available on the host.
-# no_docker: false
+# Disable the container runner even if a runtime is available on the host;
+# claude then runs directly on the host with no isolation. (no_docker is the
+# retained back-compat alias for this key.)
+# no_container: false
 
-# Strict sandbox mode. Forces the container runner (no --no-docker fallback),
+# Strict sandbox mode. Forces the container runner (no --no-container fallback),
 # restricts the egress allowlist to *.anthropic.com plus host.docker.internal,
 # mounts the container rootfs read-only, sets no-new-privileges, and attaches
 # the runner to an --internal network so the only route out is the scrutineer
@@ -85,7 +87,7 @@
 # disables the mechanism entirely.
 # profiles_dir: docker/profiles
 
-# Extra hosts the docker runner's egress proxy will tunnel to, on top of
+# Extra hosts the container runner's egress proxy will tunnel to, on top of
 # the built-in allowlist (Anthropic API, *.ecosyste.ms, major forges,
 # package registries, advisory sources, host.docker.internal). Use
 # "*.example.com" to allow every subdomain.

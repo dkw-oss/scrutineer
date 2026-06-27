@@ -1341,17 +1341,25 @@ func TestFindings_scannerToggle(t *testing.T) {
 }
 
 func TestDeepDiveSkillNameSafeForSplicing(t *testing.T) {
-	// deepDiveSkillName is interpolated as text into deepDiveFindingsCountSQL
-	// (an ORDER BY correlated subquery that cannot take a bind parameter), so
-	// it must never carry a SQL metacharacter. This tripwire fails loudly if a
-	// refactor changes the constant or makes the value dynamic.
-	if strings.ContainsAny(deepDiveSkillName, "'\";\\\x00") {
-		t.Errorf("deepDiveSkillName %q must stay free of SQL metacharacters; it is spliced into deepDiveFindingsCountSQL", deepDiveSkillName)
-	}
-	// And the escaping it now goes through is a faithful single-quote wrap for
-	// a value with no embedded quotes.
-	if got := db.SQLStringLiteral(deepDiveSkillName); got != "'"+deepDiveSkillName+"'" {
-		t.Errorf("SQLStringLiteral(%q) = %q, want simple quoting", deepDiveSkillName, got)
+	// deepDiveSkillName and vulnScanSkillName are spliced into
+	// findingsBucketSkillSQL as raw single-quoted literals (it feeds SQL such as
+	// the deepDiveFindingsCountSQL ORDER BY subquery, which cannot take a bind
+	// parameter), so neither may ever carry a SQL metacharacter. This tripwire
+	// fails loudly if a refactor changes a constant or makes a value dynamic.
+	for _, name := range []string{deepDiveSkillName, vulnScanSkillName} {
+		if strings.ContainsAny(name, "'\";\\\x00") {
+			t.Errorf("skill name %q must stay free of SQL metacharacters; it is spliced into findingsBucketSkillSQL", name)
+		}
+		// The literal it is spliced as must be a faithful single-quote wrap —
+		// the same output db.SQLStringLiteral would produce — and must actually
+		// appear in findingsBucketSkillSQL.
+		quoted := db.SQLStringLiteral(name)
+		if quoted != "'"+name+"'" {
+			t.Errorf("SQLStringLiteral(%q) = %q, want simple quoting", name, quoted)
+		}
+		if !strings.Contains(findingsBucketSkillSQL, quoted) {
+			t.Errorf("findingsBucketSkillSQL %q must splice %s as %q", findingsBucketSkillSQL, name, quoted)
+		}
 	}
 }
 
