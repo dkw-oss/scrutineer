@@ -578,6 +578,12 @@ func TestProxySidecarRunArgs(t *testing.T) {
 	if !hasAdjacent(args, "--add-host", HostGatewayAlias+":192.0.2.9") {
 		t.Errorf("missing host-gateway add-host: %v", args)
 	}
+	// Must start on a connectable bridge, not the rootless default (pasta): the
+	// per-scan --internal network is attached later with `podman network
+	// connect`, which pasta-mode containers reject ("invalid network mode").
+	if !hasAdjacent(args, "--network", "podman") {
+		t.Errorf("sidecar must start on a bridge network so --internal can be connected: %v", args)
+	}
 	// Config via env.
 	for _, kv := range []string{
 		"SCRUTINEER_PROXY_TOKEN=tok",

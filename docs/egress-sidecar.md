@@ -99,9 +99,47 @@ kill $HOST_API
 - `REACHABLE` → your backend forwards host-gateway to host loopback. The sidecar
   will work. Continue.
 - `BLOCKED` → it does **not**. scrutineer will **refuse** hardened scans here
-  (fail closed). Options: upgrade to podman ≥ 5.0 / a pasta build with
-  `--map-host-loopback`, switch the backend, or use
-  `--hardened-rootless-runtime` (cooperative egress) / rootful podman / docker.
+  (fail closed). If you are already on podman ≥ 5.0 with pasta, it is most likely
+  suppressing the host-loopback mapping — re-enable it (next section). Otherwise
+  switch the backend, or use `--hardened-rootless-runtime` (cooperative egress) /
+  rootful podman / docker.
+
+### Re-enabling host-loopback under pasta
+
+podman ≥ 5.0 uses pasta, which *can* forward host-gateway to the host loopback,
+but podman commonly starts it with that mapping **disabled** — so a modern host
+can still read `BLOCKED`. Confirm what podman passes to pasta (look for
+`--map-host-loopback none`, or its absence) while a container runs:
+
+```sh
+podman run -d --rm --name nettest alpine sleep 10 >/dev/null
+pgrep -a pasta
+podman rm -f nettest >/dev/null
+```
+
+Re-enable it in your rootless `containers.conf` (per-user; no restart — the next
+`podman run` reads it). Derive the gateway address rather than hardcoding it:
+
+```sh
+GW=$(podman run --rm --add-host hgw:host-gateway alpine \
+       cat /etc/hosts | awk '$2=="hgw"{print $1; exit}')
+mkdir -p ~/.config/containers
+# creates/overwrites containers.conf; if you already have one, add these keys by hand
+cat > ~/.config/containers/containers.conf <<EOF
+[network]
+default_rootless_network_cmd = "pasta"
+pasta_options = ["--map-host-loopback", "$GW"]
+EOF
+```
+
+This is a **one-time** host setup: `containers.conf` persists and every rootless
+`podman run` (scrutineer's sidecar included) reads it — no need to re-apply per
+scan or per scrutineer start. Re-derive only if pasta's gateway later changes
+(e.g. a podman/pasta upgrade), which the Step 1 probe will surface as `BLOCKED`
+again. Note it also makes the host loopback reachable from any rootless container
+on the default network, not just the sidecar — fine on a dedicated scrutineer
+host, weigh it on a shared one. Re-run the Step 1 probe; it should print
+`REACHABLE`.
 
 ## Step 2 — build the runner image (it now carries the `scrutineer` binary)
 

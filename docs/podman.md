@@ -110,8 +110,11 @@ over its egress leg via the host-gateway alias instead. That only lands on a
 loopback-bound server if the rootless network backend **forwards host-gateway to
 the host loopback**:
 
-- **pasta** (podman's default rootless backend since 5.0) maps the host with
-  `--map-host-loopback`, so host loopback services are reachable.
+- **pasta** (podman's default rootless backend since 5.0) can map the host with
+  `--map-host-loopback` so host loopback services are reachable — but podman often
+  starts it with that mapping disabled, so a modern host may still read `BLOCKED`.
+  See [egress-sidecar.md](egress-sidecar.md) to confirm (`pgrep -a pasta`) and
+  re-enable it via `pasta_options`.
 - **slirp4netns** reaches host loopback when host-loopback is enabled (podman's
   default for `host.containers.internal`).
 

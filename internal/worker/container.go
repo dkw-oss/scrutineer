@@ -812,6 +812,12 @@ func (d ContainerRunner) proxySidecarRunArgs(name string) []string {
 	args := []string{
 		"run", "-d",
 		"--name", name,
+		// The sidecar is dual-homed: startProxySidecar attaches the per-scan
+		// --internal network to it after launch with `podman network connect`,
+		// which only works on a netavark bridge. The rootless default (pasta)
+		// rejects it ("pasta is not supported: invalid network mode"), so pin the
+		// default bridge for the egress leg rather than inheriting pasta.
+		"--network", "podman",
 		"--cap-drop", "ALL",
 		"--security-opt", "no-new-privileges",
 		"--read-only",
