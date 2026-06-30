@@ -1,8 +1,10 @@
 package worker
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -137,15 +139,24 @@ type EgressProxy struct {
 	// default of HostGatewayAlias.
 	APIHosts []string
 	Log      *slog.Logger
+	// GatewayDialHost overrides the address the proxy dials for the host skill
+	// API (requests whose host is HostGatewayAlias). The in-process host proxy
+	// leaves it "" and dials 127.0.0.1: it shares the host's loopback, so the
+	// loopback-bound web server is reachable directly. The egress-proxy SIDECAR
+	// runs in its own container, where 127.0.0.1 is the sidecar's own loopback,
+	// not the host's; it sets this to the host-gateway IPv4 of its
+	// egress network so the host API is reached across the namespace boundary.
+	GatewayDialHost string
 
 	transport *http.Transport
 	once      sync.Once
 }
 
 const (
-	egressDialTimeout = 10 * time.Second
-	egressCopyBuf     = 32 << 10
-	egressIdlePerHost = 4
+	egressDialTimeout      = 10 * time.Second
+	egressCopyBuf          = 32 << 10
+	egressIdlePerHost      = 4
+	egressHostProbeBackoff = 500 * time.Millisecond
 )
 
 func (p *EgressProxy) init() {
@@ -295,7 +306,8 @@ func NewProxyToken() string {
 	return hex.EncodeToString(b[:])
 }
 
-// ProxyURL builds the http_proxy-style URL for Docker/Podman containers.
+// ProxyURL builds the http_proxy-style URL for Docker/Podman containers
+// reaching the in-process host proxy via the host-gateway alias.
 func ProxyURL(token string, port int) string {
 	return ProxyURLForHost(token, HostGatewayAlias, port)
 }
@@ -304,6 +316,14 @@ func ProxyURL(token string, port int) string {
 // gateway is runtime-specific.
 func ProxyURLForHost(token, host string, port int) string {
 	return fmt.Sprintf("http://scrutineer:%s@%s:%d", token, host, port)
+}
+
+// ProxyURLForEndpoint builds the http_proxy-style URL for a proxy reachable at
+// an arbitrary host:port. The egress proxy sidecar is addressed by its
+// container name on the per-scan --internal network, so the scan points
+// HTTPS_PROXY at the sidecar's name:port rather than the host-gateway alias.
+func ProxyURLForEndpoint(token, endpoint string) string {
+	return fmt.Sprintf("http://scrutineer:%s@%s", token, endpoint)
 }
 
 func splitTarget(hostport string) (host, port string) {
@@ -329,11 +349,131 @@ func (p *EgressProxy) apiHosts() []string {
 	return []string{HostGatewayAlias}
 }
 
+// dialTarget resolves a request's host:port to the address the proxy actually
+// dials. A request to an API host (HostGatewayAlias by default) is rewritten to
+// gatewayDialHost (127.0.0.1 for the in-process host proxy, the egress-network
+// host-gateway IPv4 for the sidecar); every other host is dialed as given.
 func (p *EgressProxy) dialTarget(host, port string) string {
 	if p.isAPIHost(host) {
-		host = "127.0.0.1"
+		host = p.gatewayDialHost()
 	}
 	return net.JoinHostPort(host, port)
+}
+
+// gatewayDialHost is the address HostGatewayAlias resolves to when dialing.
+// "" (the host-proxy default) means 127.0.0.1, preserving the loopback rewrite
+// that lets the in-process proxy reach the loopback-bound web server.
+func (p *EgressProxy) gatewayDialHost() string {
+	if p.GatewayDialHost != "" {
+		return p.GatewayDialHost
+	}
+	return "127.0.0.1"
+}
+
+// ServeEgressProxy runs p on addr and blocks until the server stops. The egress
+// proxy sidecar uses it to listen on a fixed port inside its container; the
+// in-process host proxy uses StartEgressProxy instead (ephemeral port, returns
+// immediately). Both share the handler and timeouts.
+func ServeEgressProxy(p *EgressProxy, addr string) error {
+	p.init()
+	srv := &http.Server{Addr: addr, Handler: p, ReadHeaderTimeout: egressDialTimeout}
+	return srv.ListenAndServe()
+}
+
+// dnsCandidates reduces an egress allowlist to resolvable hostnames for the
+// sidecar's DNS readiness check: it drops the host-gateway alias (which resolves
+// via /etc/hosts, not real DNS, so it proves nothing about upstream resolution)
+// and reduces each "*.example.com" wildcard to its parent "example.com".
+func dnsCandidates(allow []string) []string {
+	var out []string
+	for _, a := range allow {
+		if strings.EqualFold(a, HostGatewayAlias) {
+			continue
+		}
+		host := strings.TrimPrefix(strings.ToLower(a), "*.")
+		if host != "" {
+			out = append(out, host)
+		}
+	}
+	return out
+}
+
+// VerifyUpstreamDNS fails closed when the sidecar cannot resolve its allowlisted
+// upstreams. Under rootless --hardened, upstream names (e.g. api.anthropic.com)
+// are resolved by the sidecar CONTAINER, not the host, so a rootless netns whose
+// resolver the host has but the container doesn't would let a scan start and then
+// fail mid-run on the first model call. This turns that into a clear fail-closed
+// startup refusal. It passes as soon as any candidate actually resolves; it fails
+// closed when every candidate returns NXDOMAIN (a resolver that answers but cannot
+// forward external lookups, e.g. an --internal network's aardvark) or the resolver
+// is unreachable. A pure host-gateway allowlist has no upstreams to prove and passes.
+func VerifyUpstreamDNS(ctx context.Context, allow []string) error {
+	return verifyUpstreamDNS(ctx, allow, (&net.Resolver{}).LookupHost)
+}
+
+func verifyUpstreamDNS(ctx context.Context, allow []string, lookup func(context.Context, string) ([]string, error)) error {
+	candidates := dnsCandidates(allow)
+	if len(candidates) == 0 {
+		return nil
+	}
+	var lastErr error
+	nxdomain := 0
+	for _, h := range candidates {
+		_, err := lookup(ctx, h)
+		if err == nil {
+			return nil // actually resolved: the resolver forwards external lookups
+		}
+		var dnsErr *net.DNSError
+		if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+			nxdomain++ // NXDOMAIN: keep looking for a real resolution
+		}
+		lastErr = err
+	}
+	// Nothing resolved. NXDOMAIN for every candidate means the resolver answers
+	// but cannot forward external lookups (e.g. an --internal network's aardvark),
+	// which would let a scan start and then 502 on its first model call -- so fail
+	// closed rather than treat "the resolver answered" as working DNS.
+	if nxdomain == len(candidates) {
+		return fmt.Errorf("sidecar resolver returned NXDOMAIN for every allowlisted upstream (%v); it cannot forward external DNS -- check the rootless network backend's DNS", candidates)
+	}
+	return fmt.Errorf("sidecar cannot reach a DNS resolver for any allowlisted upstream (tried %v): %w; check the rootless network backend's DNS", candidates, lastErr)
+}
+
+// WaitHostAPIReachable blocks until an HTTP request to host:port returns any
+// response, or ctx is done (fail closed). The egress-proxy sidecar calls it
+// before it starts listening: under rootless podman the sidecar reaches the
+// host's loopback-bound skill API only if the network backend forwards
+// host-gateway to the host loopback (pasta --map-host-loopback / slirp4netns
+// host-loopback). Gating readiness on this probe makes an unsupported backend
+// fail the scan closed -- the sidecar never accepts proxy traffic it could not
+// forward to the host API -- rather than silently breaking every skill API call.
+// Any HTTP status counts as reachable (even 401/404): the point is that a real
+// server answered at all, not which status it chose. Redirects are not followed
+// so an unreachable redirect target cannot mask a reachable server.
+func WaitHostAPIReachable(ctx context.Context, host, port string) error {
+	target := "http://" + net.JoinHostPort(host, port) + "/"
+	client := &http.Client{
+		Timeout:       egressDialTimeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	var lastErr error
+	for {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+		if err != nil {
+			return err
+		}
+		resp, err := client.Do(req)
+		if err == nil {
+			_ = resp.Body.Close()
+			return nil
+		}
+		lastErr = err
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("host skill API at %s unreachable: %w", net.JoinHostPort(host, port), lastErr)
+		case <-time.After(egressHostProbeBackoff):
+		}
+	}
 }
 
 func pipe(a, b net.Conn) {

@@ -67,8 +67,8 @@ func TestBuildRunArgs_KeepIDGating(t *testing.T) {
 
 func TestBuildRunArgs_AppleOmitsDockerOnlyFlags(t *testing.T) {
 	d := ContainerRunner{
-		Runtime:                 ContainerRuntime{Bin: "apple"},
-		HardenedRootlessRuntime: true,
+		Runtime:             ContainerRuntime{Bin: "apple"},
+		HardenedRuntimeOnly: true,
 	}
 	got := d.buildRunArgs("/work/abs", "img:latest", hardenedNet{}, "")
 	for _, a := range got {
@@ -158,10 +158,10 @@ func TestBuildRunArgs_ContainerHardening(t *testing.T) {
 
 	hasNoNewPrivs := func(args []string) bool { return hasAdjacent(args, "--security-opt", "no-new-privileges") }
 
-	// --hardened-rootless-runtime: read-only + no-new-privileges, but NOT the
+	// --hardened-runtime-only: read-only + no-new-privileges, but NOT the
 	// per-scan --internal network -- that network is the part rootless podman
 	// can't route to the host proxy, and is the whole reason this flag exists.
-	roR := ContainerRunner{HardenedRootlessRuntime: true}.buildRunArgs("/work/abs", "img:latest", hardenedNet{name: net}, "")
+	roR := ContainerRunner{HardenedRuntimeOnly: true}.buildRunArgs("/work/abs", "img:latest", hardenedNet{name: net}, "")
 	if !slices.Contains(roR, "--read-only") || !hasNoNewPrivs(roR) {
 		t.Errorf("hardened-rootless-runtime: expected --read-only + no-new-privileges in %v", roR)
 	}
@@ -195,7 +195,7 @@ func TestBuildRunArgs_ContainerHardening(t *testing.T) {
 
 	// The baseline -- --cap-drop ALL, non-root --user, the /tmp tmpfs -- is
 	// present in EVERY mode; the new flag must not disturb that invariant.
-	for _, mode := range []ContainerRunner{{}, {HardenedRootlessRuntime: true}, {Hardened: true}} {
+	for _, mode := range []ContainerRunner{{}, {HardenedRuntimeOnly: true}, {Hardened: true}} {
 		args := mode.buildRunArgs("/work/abs", "img:latest", hardenedNet{name: net}, "")
 		if !hasAdjacent(args, "--cap-drop", "ALL") {
 			t.Errorf("%+v: missing --cap-drop ALL: %v", mode, args)
@@ -212,7 +212,7 @@ func TestBuildRunArgs_ContainerHardening(t *testing.T) {
 func TestCheckHardenedWorkspace_GatedOnHardeningFlags(t *testing.T) {
 	// A small real workspace is under the cap, so every mode passes.
 	small := t.TempDir()
-	for _, d := range []ContainerRunner{{}, {HardenedRootlessRuntime: true}, {Hardened: true}} {
+	for _, d := range []ContainerRunner{{}, {HardenedRuntimeOnly: true}, {Hardened: true}} {
 		if err := d.checkHardenedWorkspace(small); err != nil {
 			t.Errorf("%+v: small workspace should pass: %v", d, err)
 		}
@@ -226,8 +226,8 @@ func TestCheckHardenedWorkspace_GatedOnHardeningFlags(t *testing.T) {
 	if err := (ContainerRunner{}).checkHardenedWorkspace(missing); err != nil {
 		t.Errorf("default mode must be a no-op, got %v", err)
 	}
-	if err := (ContainerRunner{HardenedRootlessRuntime: true}).checkHardenedWorkspace(missing); err == nil {
-		t.Error("--hardened-rootless-runtime must run the workspace cap check")
+	if err := (ContainerRunner{HardenedRuntimeOnly: true}).checkHardenedWorkspace(missing); err == nil {
+		t.Error("--hardened-runtime-only must run the workspace cap check")
 	}
 	if err := (ContainerRunner{Hardened: true}).checkHardenedWorkspace(missing); err == nil {
 		t.Error("--hardened must run the workspace cap check")
@@ -524,5 +524,260 @@ func TestResolveProfile_SubPath(t *testing.T) {
 	}
 	if !matchedPhpExtInSubPath {
 		t.Errorf("expected php-ext profile match using subPath")
+	}
+}
+
+func TestUsesEgressSidecar(t *testing.T) {
+	// The egress proxy sidecar is for exactly one configuration: rootless podman
+	// under --hardened, where the --internal network can't reach the host proxy.
+	// Everything else keeps the host-proxy path.
+	rootlessHardened := ContainerRunner{Hardened: true, Runtime: ContainerRuntime{Bin: "podman", Rootless: true}}
+	if !rootlessHardened.usesEgressSidecar() {
+		t.Error("rootless podman + --hardened must use the egress sidecar")
+	}
+	for _, d := range []ContainerRunner{
+		{Hardened: true}, // docker hardened -> host proxy
+		{Hardened: true, Runtime: ContainerRuntime{Bin: "podman"}},     // rootful podman hardened
+		{Hardened: true, Runtime: ContainerRuntime{Bin: runtimeApple}}, // apple hardened -> host proxy, NOT a sidecar
+		{Runtime: ContainerRuntime{Bin: "podman", Rootless: true}},     // rootless but not hardened
+		{Runtime: ContainerRuntime{Bin: "docker"}},                     // docker, not hardened
+	} {
+		if d.usesEgressSidecar() {
+			t.Errorf("did not expect a sidecar for %+v", d)
+		}
+	}
+}
+
+func TestProxySidecarRunArgs(t *testing.T) {
+	d := ContainerRunner{
+		Runtime:  ContainerRuntime{Bin: "podman", Rootless: true},
+		Hardened: true,
+		Egress: EgressSidecarConfig{
+			Token:     "tok",
+			Allow:     []string{"*.anthropic.com", "host.docker.internal"},
+			APIPort:   "8080",
+			GatewayIP: "192.0.2.9",
+		},
+	}
+	args := d.proxySidecarRunArgs("scrutineer-proxy-7")
+
+	// Detached and locked down -- the sidecar runs scrutineer's own trusted code
+	// but gets the same defense-in-depth as the scan container.
+	if !slices.Contains(args, "-d") {
+		t.Errorf("sidecar must be detached: %v", args)
+	}
+	if slices.Contains(args, "--rm") {
+		t.Errorf("sidecar must NOT use --rm, or its logs vanish on an early exit: %v", args)
+	}
+	if !hasAdjacent(args, "--name", "scrutineer-proxy-7") {
+		t.Errorf("missing --name: %v", args)
+	}
+	if !hasAdjacent(args, "--cap-drop", "ALL") || !hasAdjacent(args, "--security-opt", "no-new-privileges") || !slices.Contains(args, "--read-only") {
+		t.Errorf("sidecar not locked down: %v", args)
+	}
+	// Host-gateway wired to the resolved IPv4 so it can reach the host skill API.
+	if !hasAdjacent(args, "--add-host", HostGatewayAlias+":192.0.2.9") {
+		t.Errorf("missing host-gateway add-host: %v", args)
+	}
+	// Must start on a connectable bridge, not the rootless default (pasta): the
+	// per-scan --internal network is attached later with `podman network
+	// connect`, which pasta-mode containers reject ("invalid network mode").
+	if !hasAdjacent(args, "--network", "podman") {
+		t.Errorf("sidecar must start on a bridge network so --internal can be connected: %v", args)
+	}
+	// Config via env.
+	for _, kv := range []string{
+		"SCRUTINEER_PROXY_TOKEN=tok",
+		"SCRUTINEER_PROXY_ALLOW=*.anthropic.com,host.docker.internal",
+		"SCRUTINEER_PROXY_API_HOST=192.0.2.9",
+		"SCRUTINEER_PROXY_API_PORT=8080",
+		"SCRUTINEER_PROXY_LISTEN=:3128",
+	} {
+		if !hasAdjacent(args, "-e", kv) {
+			t.Errorf("missing env %q in %v", kv, args)
+		}
+	}
+	// Runs the DEFAULT runner image (which carries the scrutineer binary), then
+	// `scrutineer proxy`. The tail must be: -- <image> scrutineer proxy.
+	tail := args[len(args)-4:]
+	if !reflect.DeepEqual(tail, []string{"--", DefaultRunnerImage, "scrutineer", "proxy"}) {
+		t.Errorf("sidecar command tail = %v, want -- %s scrutineer proxy", tail, DefaultRunnerImage)
+	}
+	// No host bind mounts and no keep-id: the sidecar touches no host files.
+	for _, a := range args {
+		if a == "-v" || strings.HasPrefix(a, "--userns") {
+			t.Errorf("sidecar must not bind-mount or keep-id: %q in %v", a, args)
+		}
+	}
+}
+
+func TestNoteworthyProxyLogLine(t *testing.T) {
+	cases := []struct {
+		line string
+		want bool
+	}{
+		{`time=2026-06-27T00:00:00Z level=WARN msg="egress denied" method=CONNECT host=evil.test`, true},
+		{`time=2026-06-27T00:00:00Z level=ERROR msg="something broke"`, true},
+		{`time=2026-06-27T00:00:00Z level=INFO msg="egress proxy listening" addr=:3128`, false},
+		{`time=2026-06-27T00:00:00Z level=INFO msg="egress proxy: waiting for host skill API"`, false},
+		{"", false},
+	}
+	for _, c := range cases {
+		if got := noteworthyProxyLogLine(c.line); got != c.want {
+			t.Errorf("noteworthyProxyLogLine(%q) = %v, want %v", c.line, got, c.want)
+		}
+	}
+}
+
+func TestEmitProxyLogLines(t *testing.T) {
+	// Capture-on-teardown must surface the sidecar's denials/failures into the
+	// scan record but drop routine INFO chatter, each prefixed so it's traceable.
+	out := []byte(strings.Join([]string{
+		`time=t level=INFO msg="egress proxy listening" addr=:3128`,
+		`time=t level=WARN msg="egress denied" method=CONNECT host=evil.test`,
+		``,
+		`time=t level=ERROR msg="upstream unreachable"`,
+		`time=t level=INFO msg="waiting for host skill API"`,
+	}, "\n"))
+
+	var got []string
+	emitProxyLogLines(out, func(e Event) {
+		if e.Kind != KindText {
+			t.Errorf("unexpected event kind %v", e.Kind)
+		}
+		got = append(got, e.Text)
+	})
+
+	want := []string{
+		`egress-proxy: time=t level=WARN msg="egress denied" method=CONNECT host=evil.test`,
+		`egress-proxy: time=t level=ERROR msg="upstream unreachable"`,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("emitProxyLogLines emitted\n  %v\nwant\n  %v", got, want)
+	}
+}
+
+func TestVerifyProxyBinary_NoopWhenImageAbsent(t *testing.T) {
+	// The smoke test must never block startup when there is no image to run: an
+	// empty image short-circuits, and an image not present locally is skipped
+	// (the first scan pulls it and would surface any problem then). Both return
+	// nil without depending on a runtime being installed.
+	if err := VerifyProxyBinary(context.Background(), ContainerRuntime{Bin: "docker"}, ""); err != nil {
+		t.Errorf("empty image must be a no-op, got %v", err)
+	}
+	if err := VerifyProxyBinary(context.Background(), ContainerRuntime{Bin: "docker"}, "scrutineer-nonexistent-test-image:does-not-exist"); err != nil {
+		t.Errorf("absent image must be a no-op, got %v", err)
+	}
+}
+
+func TestStartProxySidecar_RequiresGatewayIP(t *testing.T) {
+	// An unresolved host-gateway means the sidecar cannot reach the host API, so
+	// the scan must be refused before any container is launched (fail closed).
+	d := ContainerRunner{
+		Runtime:  ContainerRuntime{Bin: "podman", Rootless: true},
+		Hardened: true,
+		Egress:   EgressSidecarConfig{Token: "t", Allow: []string{"x"}, APIPort: "8080"}, // GatewayIP empty
+	}
+	if _, _, err := d.startProxySidecar(SkillJob{ScanID: 7}, "scrutineer-hardened-7"); err == nil {
+		t.Fatal("expected an error when the host-gateway IPv4 is unresolved")
+	}
+}
+
+func TestSidecarReachArgs(t *testing.T) {
+	// Probe (b), sidecar variant: curl the sidecar by IP:port on the --internal
+	// network (that network is --disable-dns, so the scan reaches it by IP, not by
+	// name); no --add-host.
+	args := sidecarReachArgs("scrutineer-hardened-7", "10.89.1.2:3128", "img:latest")
+	if !hasAdjacent(args, "--network", "scrutineer-hardened-7") {
+		t.Errorf("missing --network: %v", args)
+	}
+	if !hasAdjacent(args, "--cap-drop", "ALL") {
+		t.Errorf("missing --cap-drop ALL: %v", args)
+	}
+	for _, a := range args {
+		if a == "--add-host" {
+			t.Errorf("sidecar reach probe must not wire --add-host: %v", args)
+		}
+	}
+	if !strings.Contains(strings.Join(args, " "), "http://10.89.1.2:3128/") {
+		t.Errorf("reach probe should curl the sidecar endpoint: %v", args)
+	}
+}
+
+func TestBuildRunArgs_SidecarProxyURL(t *testing.T) {
+	// In sidecar mode HTTPS_PROXY points at the sidecar by IP on the --internal
+	// network, built per-scan from the endpoint -- NOT the process-wide host
+	// proxy URL, which must not leak into the scan.
+	d := ContainerRunner{
+		Hardened: true,
+		Runtime:  ContainerRuntime{Bin: "podman", Rootless: true},
+		ProxyURL: "http://scrutineer:tok@host.docker.internal:55000",
+		Egress:   EgressSidecarConfig{Token: "tok"},
+	}
+	hn := hardenedNet{name: "scrutineer-hardened-7", proxyEndpoint: "10.89.1.2:3128", proxyName: "scrutineer-proxy-7"}
+	args := d.buildRunArgs("/work/abs", "img:latest", hn, "")
+
+	const want = "http://scrutineer:tok@10.89.1.2:3128"
+	for _, env := range []string{"HTTPS_PROXY=" + want, "HTTP_PROXY=" + want, "ALL_PROXY=" + want} {
+		if !hasAdjacent(args, "-e", env) {
+			t.Errorf("expected sidecar %s in %v", env, args)
+		}
+	}
+	for _, a := range args {
+		if strings.Contains(a, "host.docker.internal:55000") {
+			t.Errorf("host-proxy URL leaked into a sidecar scan: %q", a)
+		}
+	}
+	// The scan still attaches the per-scan --internal network.
+	if !hasAdjacent(args, "--network", "scrutineer-hardened-7") {
+		t.Errorf("missing per-scan --internal network: %v", args)
+	}
+}
+
+func TestBuildRunArgs_HostProxyURLWhenNoSidecar(t *testing.T) {
+	// With no sidecar endpoint the scan uses the process-wide host proxy URL,
+	// exactly as docker/rootful hardened and non-hardened scans do today.
+	d := ContainerRunner{ProxyURL: "http://scrutineer:tok@host.docker.internal:55000"}
+	args := d.buildRunArgs("/work/abs", "img:latest", hardenedNet{}, "")
+	if !hasAdjacent(args, "-e", "HTTPS_PROXY=http://scrutineer:tok@host.docker.internal:55000") {
+		t.Errorf("expected the host proxy URL in %v", args)
+	}
+}
+
+func TestHardenedNetworkCreateArgs(t *testing.T) {
+	args := hardenedNetworkCreateArgs("scrutineer-hardened-9")
+	// --internal isolates egress; --disable-dns keeps the network's non-forwarding
+	// resolver out of any connected sidecar (it would NXDOMAIN external lookups and
+	// shadow the sidecar's working bridge resolver).
+	if !slices.Contains(args, "--internal") {
+		t.Errorf("missing --internal: %v", args)
+	}
+	if !slices.Contains(args, "--disable-dns") {
+		t.Errorf("missing --disable-dns: %v", args)
+	}
+	// The name comes last, after "--", so it can never be read as a flag.
+	if tail := args[len(args)-2:]; tail[0] != "--" || tail[1] != "scrutineer-hardened-9" {
+		t.Errorf("name must be the final arg after --: %v", args)
+	}
+}
+
+func TestProxySidecarName_UniquePerScanID(t *testing.T) {
+	if a, b := proxySidecarName(1), proxySidecarName(2); a == b {
+		t.Errorf("names collided: %q == %q", a, b)
+	}
+	if got := proxySidecarName(7); got != "scrutineer-proxy-7" {
+		t.Errorf("proxySidecarName(7) = %q, want scrutineer-proxy-7", got)
+	}
+}
+
+func TestParseProxySidecarNames_KeepsStrictPrefixOnly(t *testing.T) {
+	out := []byte("scrutineer-proxy-1\nscrutineer-proxy-42\nmy-scrutineer-proxy-x\nunrelated\n\n")
+	got := parseProxySidecarNames(out)
+	want := []string{"scrutineer-proxy-1", "scrutineer-proxy-42"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("parseProxySidecarNames = %v, want %v", got, want)
+	}
+	if names := parseProxySidecarNames([]byte("   \n")); names != nil {
+		t.Errorf("empty input should yield nil, got %v", names)
 	}
 }

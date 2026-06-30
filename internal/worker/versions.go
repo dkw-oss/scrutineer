@@ -50,7 +50,7 @@ func RuntimeServerVersion(ctx context.Context, rt ContainerRuntime) string {
 		return "Apple " + rt.bin() + " " + v
 	}
 	format := "{{.Server.Version}}"
-	if rt.Bin == "podman" {
+	if rt.Bin == runtimePodman {
 		format = "{{.Version}}"
 	}
 	out, err := exec.CommandContext(ctx, rt.bin(), "version", "--format", format).Output()

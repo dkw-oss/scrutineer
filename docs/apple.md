@@ -45,7 +45,7 @@ at the default still reports docker unavailable, by design.
 | `--hardened`: per-scan `--internal` egress enforcement | yes | yes; rootless verified, may fail closed | yes (verified per scan) |
 | `--hardened`: container-to-container isolation | yes | yes | yes (vmnet default) |
 | `--hardened`: `--security-opt no-new-privileges` | yes | yes | no (VM boundary substitutes) |
-| `--hardened-rootless-runtime` | yes | yes | n/a (use `--hardened`) |
+| `--hardened-runtime-only` | yes | yes | n/a (use `--hardened`) |
 
 Per-ecosystem profiles use the same code paths as docker/podman: profile images
 build with `container build --pull`, and profile auto-detection runs `brief` in
@@ -103,7 +103,7 @@ it never has to: hardened routes everything through the proxy, which recognises
 the alias and rewrites it to `127.0.0.1`. Only the `HTTPS_PROXY` address itself
 is the per-scan gateway IP.
 
-`--hardened-rootless-runtime` (the rootless-podman non-network half) is refused
+`--hardened-runtime-only` (the rootless-podman non-network half) is refused
 under `--runtime apple`: Apple's network half works, so `--hardened` is the
 right flag.
 

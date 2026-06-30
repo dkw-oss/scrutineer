@@ -159,6 +159,40 @@ func TestRegisterFlags_noContainerAliasParsesFromArgv(t *testing.T) {
 	}
 }
 
+func TestRegisterFlags_hardenedRuntimeOnlyAliasParsesFromArgv(t *testing.T) {
+	// Both the canonical --hardened-runtime-only and the deprecated
+	// --hardened-rootless-runtime alias must parse off the command line and set
+	// the same hardenedRuntimeOnly field, so existing
+	// `scrutineer --hardened-rootless-runtime ...` invocations keep working.
+	for _, name := range []string{"--hardened-runtime-only", "--hardened-rootless-runtime"} {
+		f := &flags{}
+		fs := flag.NewFlagSet("test", flag.ContinueOnError)
+		registerFlags(fs, f)
+		if err := fs.Parse([]string{name}); err != nil {
+			t.Fatalf("Parse(%q): %v", name, err)
+		}
+		if !f.hardenedRuntimeOnly {
+			t.Errorf("%s did not set hardenedRuntimeOnly", name)
+		}
+	}
+}
+
+func TestFlagsMerge_hardenedRuntimeOnlyConfigAlias(t *testing.T) {
+	// The deprecated hardened_rootless_runtime config key still applies when the
+	// canonical hardened_runtime_only is absent.
+	legacy := &flags{}
+	legacy.merge(&config.Config{HardenedRootlessRuntime: new(true)})
+	if !legacy.hardenedRuntimeOnly {
+		t.Error("deprecated config hardened_rootless_runtime was ignored")
+	}
+	// The canonical key takes precedence over the deprecated alias.
+	both := &flags{}
+	both.merge(&config.Config{HardenedRuntimeOnly: new(false), HardenedRootlessRuntime: new(true)})
+	if both.hardenedRuntimeOnly {
+		t.Error("hardened_runtime_only should take precedence over hardened_rootless_runtime")
+	}
+}
+
 func TestBuildEgressAllow_defaultIncludesConfigAndAnthropicHost(t *testing.T) {
 	cfg := &config.Config{EgressAllow: []string{"artifactory.internal", "*.mycorp.net"}}
 	allow := buildEgressAllow(false, cfg, "https://proxy.corp.com/v1", quietLog())
@@ -196,6 +230,28 @@ func TestBuildEgressAllow_hardenedNilConfig(t *testing.T) {
 	allow := buildEgressAllow(true, nil, "", quietLog())
 	if len(allow) != len(worker.HardenedEgressAllow) {
 		t.Errorf("hardened minimal allow = %v, want exactly HardenedEgressAllow", allow)
+	}
+}
+
+func TestResolveEgressSidecar_NoSidecarForNonRootless(t *testing.T) {
+	// docker, rootful podman, and the zero (docker) runtime keep the in-process
+	// host proxy: resolveEgressSidecar returns the zero config (no sidecar), and
+	// without probing for a gateway. Only rootless podman gets a sidecar, which
+	// is covered end to end by the podman integration test.
+	f := &flags{addr: "127.0.0.1:8080", runnerImage: "img"}
+	for _, rt := range []worker.ContainerRuntime{
+		{Bin: "docker"},
+		{Bin: "podman"}, // rootful
+		{Bin: "apple"},  // apple -- hardened, but uses the host proxy, not a sidecar
+		{},              // zero value = docker
+	} {
+		got, err := resolveEgressSidecar(rt, f, []string{"x"}, "tok", quietLog())
+		if err != nil {
+			t.Errorf("runtime %+v: unexpected error: %v", rt, err)
+		}
+		if got.Token != "" || got.GatewayIP != "" || got.APIPort != "" || got.Allow != nil {
+			t.Errorf("runtime %+v: expected no sidecar config, got %+v", rt, got)
+		}
 	}
 }
 
