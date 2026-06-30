@@ -18,6 +18,10 @@ import (
 // Hoisted to a constant because the identifier is checked throughout the package.
 const runtimeApple = "apple"
 
+// runtimePodman is the ContainerRuntime.Bin value for podman (rootful or
+// rootless). Hoisted to a constant for the same reason as runtimeApple.
+const runtimePodman = "podman"
+
 // ContainerRuntime identifies the OCI engine scrutineer shells out to and the
 // main trait that changes the generated `run` flags: rootless podman maps
 // --user uid:gid through /etc/subuid, so files written to bind mounts land as
@@ -55,7 +59,7 @@ func (rt ContainerRuntime) bin() string {
 // rootless podman: docker and rootful podman already run the container process
 // as the host uid, so remapping there would be wrong.
 func (rt ContainerRuntime) needsKeepID() bool {
-	return rt.Bin == "podman" && rt.Rootless
+	return rt.Bin == runtimePodman && rt.Rootless
 }
 
 // NeedsKeepID is the exported form of needsKeepID for callers outside the
@@ -77,7 +81,18 @@ func (rt ContainerRuntime) NeedsKeepID() bool {
 // rootful podman both run a bridge in the host netns (gateway on the host), so
 // they keep the trusted path and pay no probe cost.
 func (rt ContainerRuntime) needsHardenedNetVerify() bool {
-	return rt.Bin == runtimeApple || (rt.Bin == "podman" && rt.Rootless)
+	return rt.Bin == runtimeApple || (rt.Bin == runtimePodman && rt.Rootless)
+}
+
+// needsEgressSidecar reports whether hardened egress runs through a per-scan proxy
+// SIDECAR rather than the in-process host proxy. True ONLY for rootless podman,
+// where the host proxy is unreachable across the --internal boundary. It is
+// deliberately narrower than needsHardenedNetVerify (which also covers Apple):
+// Apple keeps the host proxy, reached via the per-scan gateway, and its CLI has
+// neither `--network podman` nor `network connect`, so it must not take the
+// sidecar path even though it still needs the per-scan --internal verification.
+func (rt ContainerRuntime) needsEgressSidecar() bool {
+	return rt.Bin == runtimePodman && rt.Rootless
 }
 
 // supportsHostGatewayAddHost reports whether the runtime accepts Docker's
@@ -136,13 +151,13 @@ func (rt ContainerRuntime) runArgs(args ...string) []string {
 	return append(out, args...)
 }
 
-// NeedsHardenedNetVerify is the exported form of needsHardenedNetVerify. The
-// startup path uses it to decide whether a hardened run routes egress through
-// the proxy sidecar -- the same rootless-podman condition under which the
-// per-scan --internal network's isolation must be proven, since that
-// is exactly where the host proxy is unreachable across the namespace boundary.
-func (rt ContainerRuntime) NeedsHardenedNetVerify() bool {
-	return rt.needsHardenedNetVerify()
+// NeedsEgressSidecar is the exported form of needsEgressSidecar. The startup path
+// uses it to decide whether a hardened run sets up a per-scan egress proxy sidecar
+// -- true only for rootless podman, where the host proxy is unreachable across the
+// --internal boundary. Apple and docker/rootful podman keep the in-process host
+// proxy (Apple still proves its --internal network per scan; see needsHardenedNetVerify).
+func (rt ContainerRuntime) NeedsEgressSidecar() bool {
+	return rt.needsEgressSidecar()
 }
 
 // runtimeProber runs a runtime command and returns its stdout. The production
@@ -179,13 +194,13 @@ func detectRuntime(prefer string, probe runtimeProber) (ContainerRuntime, bool) 
 			return ContainerRuntime{}, false
 		}
 		return ContainerRuntime{Bin: "docker", Version: string(bytes.TrimSpace(out))}, true
-	case "podman":
+	case runtimePodman:
 		// podman's info has no .ServerVersion (a docker-only field that would
 		// error the Go template); .Version.Version is the engine version and
 		// .Host.Security.Rootless is the rootless flag. One call confirms
 		// reachability AND rootless-ness without ever feeding podman the
 		// docker template.
-		out, err := probe("podman", "info", "--format", "{{.Version.Version}}|{{.Host.Security.Rootless}}")
+		out, err := probe(runtimePodman, "info", "--format", "{{.Version.Version}}|{{.Host.Security.Rootless}}")
 		if err != nil || len(bytes.TrimSpace(out)) == 0 {
 			return ContainerRuntime{}, false
 		}
@@ -193,7 +208,7 @@ func detectRuntime(prefer string, probe runtimeProber) (ContainerRuntime, bool) 
 		if !ok {
 			return ContainerRuntime{}, false
 		}
-		return ContainerRuntime{Bin: "podman", Rootless: rootless, Version: version}, true
+		return ContainerRuntime{Bin: runtimePodman, Rootless: rootless, Version: version}, true
 	case runtimeApple:
 		// Apple's container CLI has no docker/podman-compatible `info`
 		// template. `system status` verifies the background service is running;
@@ -312,7 +327,7 @@ func parseMajorMinor(version string) (major, minor int, ok bool) {
 // Used for a soft startup warning, not a hard gate (an unparseable version
 // returns true so a probe quirk never blocks startup).
 func (rt ContainerRuntime) HostGatewaySupported() bool {
-	if rt.Bin != "podman" {
+	if rt.Bin != runtimePodman {
 		return true
 	}
 	return podmanHostGatewaySupported(rt.Version)
@@ -326,7 +341,7 @@ func (rt ContainerRuntime) HostGatewaySupported() bool {
 // slirp4netns also works, and the sidecar verifies reachability fail-closed
 // regardless. Always true for non-podman; an unparseable version returns true.
 func (rt ContainerRuntime) HostLoopbackBackendLikely() bool {
-	if rt.Bin != "podman" {
+	if rt.Bin != runtimePodman {
 		return true
 	}
 	return podmanPastaDefault(rt.Version)

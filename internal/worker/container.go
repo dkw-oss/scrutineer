@@ -144,11 +144,12 @@ func proxySidecarName(scanID uint) string {
 // podman under --hardened: there the per-scan --internal network cannot reach
 // the host proxy across the pasta/slirp4netns boundary (see docs/podman.md), so
 // the proxy must live on the network with the scan. docker and
-// rootful podman keep the host-proxy path unchanged. The condition matches
-// needsHardenedNetVerify, so whenever the fail-closed verification runs it has a
-// sidecar to point at.
+// rootful podman keep the host-proxy path unchanged, and so does Apple's
+// container -- its CLI has neither `--network podman` nor `network connect`, so it
+// must not take the sidecar path even though it still needs the per-scan
+// --internal verification (see needsEgressSidecar vs needsHardenedNetVerify).
 func (d ContainerRunner) usesEgressSidecar() bool {
-	return d.Hardened && d.Runtime.needsHardenedNetVerify()
+	return d.Hardened && d.Runtime.needsEgressSidecar()
 }
 
 func (d ContainerRunner) image() string {

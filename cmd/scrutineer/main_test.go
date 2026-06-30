@@ -242,6 +242,7 @@ func TestResolveEgressSidecar_NoSidecarForNonRootless(t *testing.T) {
 	for _, rt := range []worker.ContainerRuntime{
 		{Bin: "docker"},
 		{Bin: "podman"}, // rootful
+		{Bin: "apple"},  // apple -- hardened, but uses the host proxy, not a sidecar
 		{},              // zero value = docker
 	} {
 		got, err := resolveEgressSidecar(rt, f, []string{"x"}, "tok", quietLog())

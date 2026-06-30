@@ -537,9 +537,10 @@ func TestUsesEgressSidecar(t *testing.T) {
 	}
 	for _, d := range []ContainerRunner{
 		{Hardened: true}, // docker hardened -> host proxy
-		{Hardened: true, Runtime: ContainerRuntime{Bin: "podman"}}, // rootful podman hardened
-		{Runtime: ContainerRuntime{Bin: "podman", Rootless: true}}, // rootless but not hardened
-		{Runtime: ContainerRuntime{Bin: "docker"}},                 // docker, not hardened
+		{Hardened: true, Runtime: ContainerRuntime{Bin: "podman"}},     // rootful podman hardened
+		{Hardened: true, Runtime: ContainerRuntime{Bin: runtimeApple}}, // apple hardened -> host proxy, NOT a sidecar
+		{Runtime: ContainerRuntime{Bin: "podman", Rootless: true}},     // rootless but not hardened
+		{Runtime: ContainerRuntime{Bin: "docker"}},                     // docker, not hardened
 	} {
 		if d.usesEgressSidecar() {
 			t.Errorf("did not expect a sidecar for %+v", d)

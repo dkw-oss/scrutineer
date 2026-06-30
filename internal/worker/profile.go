@@ -359,7 +359,7 @@ func resolveBaseDigest(ctx context.Context, rt ContainerRuntime, runnerImage str
 	}
 	var out []byte
 	var err error
-	if rt.Bin == "podman" || rt.Bin == runtimeApple {
+	if rt.Bin == runtimePodman || rt.Bin == runtimeApple {
 		// podman and Apple's container CLI have no `buildx imagetools`; skopeo
 		// fetches the same canonical manifest bytes without pulling layers. ""
 		// when skopeo is absent, so the caller keeps the ref-string fallback
