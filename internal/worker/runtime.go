@@ -130,8 +130,8 @@ func (rt ContainerRuntime) supportsNoNewPrivileges() bool {
 // host-only network + allowlisting proxy, no no-new-privileges. So --hardened is
 // accepted; only --hardened-runtime-only (the rootless-podman non-network
 // half) is refused, since Apple's network half works. See docs/apple.md.
-func (rt ContainerRuntime) HardeningSupportError(hardenedRootless bool) error {
-	if rt.Bin == runtimeApple && hardenedRootless {
+func (rt ContainerRuntime) HardeningSupportError(hardenedRuntimeOnly bool) error {
+	if rt.Bin == runtimeApple && hardenedRuntimeOnly {
 		return fmt.Errorf("--runtime apple does not support --hardened-runtime-only " +
 			"(that is the rootless-podman non-network half); use --hardened, whose " +
 			"--internal host-only network Apple's container runtime supports")

@@ -47,7 +47,7 @@ type ContainerRunner struct {
 	// Profile images must work with a read-only rootfs when this is
 	// enabled (writable paths beyond /work and /tmp will fail).
 	Hardened bool
-	// HardenedRootlessRuntime applies the non-network half of --hardened -- a
+	// HardenedRuntimeOnly applies the non-network half of --hardened -- a
 	// read-only rootfs, no-new-privileges, and the post-clone workspace cap --
 	// WITHOUT the per-scan --internal network. Those are all independent of the
 	// network, so unlike full --hardened they work under rootless podman (whose
@@ -57,7 +57,7 @@ type ContainerRunner struct {
 	// implies all of these, so this is the rootless stand-in for them, not an
 	// addition on top (setting both is harmless). The read-only rootfs can break
 	// custom profile images that write outside /work and /tmp.
-	HardenedRootlessRuntime bool
+	HardenedRuntimeOnly bool
 	// Runtime selects the OCI engine (docker, podman, or Apple's container) and
 	// carries the rootless flag that gates --userns=keep-id. The zero value is
 	// docker, so a bare ContainerRunner{} keeps shelling out to "docker".
@@ -402,7 +402,7 @@ func (d ContainerRunner) buildRunArgs(absWork, image string, hnet hardenedNet, c
 			"-e", "CLAUDE_CONFIG_DIR=/claude-config",
 		)
 	}
-	if d.Hardened || d.HardenedRootlessRuntime {
+	if d.Hardened || d.HardenedRuntimeOnly {
 		// Read-only rootfs + no-new-privileges close the residual paths a
 		// hostile skill could use to escalate inside the container. /work
 		// stays writable (skill output) and /tmp is the tmpfs declared above
@@ -518,7 +518,7 @@ const profileGuideFileMode os.FileMode = 0o644
 // --hardened and --hardened-runtime-only (the cap is a host-side size check,
 // not network-coupled), and is a no-op for plain default scans.
 func (d ContainerRunner) checkHardenedWorkspace(workRoot string) error {
-	if !d.Hardened && !d.HardenedRootlessRuntime {
+	if !d.Hardened && !d.HardenedRuntimeOnly {
 		return nil
 	}
 	size, err := dirSize(workRoot)

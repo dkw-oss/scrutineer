@@ -67,8 +67,8 @@ func TestBuildRunArgs_KeepIDGating(t *testing.T) {
 
 func TestBuildRunArgs_AppleOmitsDockerOnlyFlags(t *testing.T) {
 	d := ContainerRunner{
-		Runtime:                 ContainerRuntime{Bin: "apple"},
-		HardenedRootlessRuntime: true,
+		Runtime:             ContainerRuntime{Bin: "apple"},
+		HardenedRuntimeOnly: true,
 	}
 	got := d.buildRunArgs("/work/abs", "img:latest", hardenedNet{}, "")
 	for _, a := range got {
@@ -161,7 +161,7 @@ func TestBuildRunArgs_ContainerHardening(t *testing.T) {
 	// --hardened-runtime-only: read-only + no-new-privileges, but NOT the
 	// per-scan --internal network -- that network is the part rootless podman
 	// can't route to the host proxy, and is the whole reason this flag exists.
-	roR := ContainerRunner{HardenedRootlessRuntime: true}.buildRunArgs("/work/abs", "img:latest", hardenedNet{name: net}, "")
+	roR := ContainerRunner{HardenedRuntimeOnly: true}.buildRunArgs("/work/abs", "img:latest", hardenedNet{name: net}, "")
 	if !slices.Contains(roR, "--read-only") || !hasNoNewPrivs(roR) {
 		t.Errorf("hardened-rootless-runtime: expected --read-only + no-new-privileges in %v", roR)
 	}
@@ -195,7 +195,7 @@ func TestBuildRunArgs_ContainerHardening(t *testing.T) {
 
 	// The baseline -- --cap-drop ALL, non-root --user, the /tmp tmpfs -- is
 	// present in EVERY mode; the new flag must not disturb that invariant.
-	for _, mode := range []ContainerRunner{{}, {HardenedRootlessRuntime: true}, {Hardened: true}} {
+	for _, mode := range []ContainerRunner{{}, {HardenedRuntimeOnly: true}, {Hardened: true}} {
 		args := mode.buildRunArgs("/work/abs", "img:latest", hardenedNet{name: net}, "")
 		if !hasAdjacent(args, "--cap-drop", "ALL") {
 			t.Errorf("%+v: missing --cap-drop ALL: %v", mode, args)
@@ -212,7 +212,7 @@ func TestBuildRunArgs_ContainerHardening(t *testing.T) {
 func TestCheckHardenedWorkspace_GatedOnHardeningFlags(t *testing.T) {
 	// A small real workspace is under the cap, so every mode passes.
 	small := t.TempDir()
-	for _, d := range []ContainerRunner{{}, {HardenedRootlessRuntime: true}, {Hardened: true}} {
+	for _, d := range []ContainerRunner{{}, {HardenedRuntimeOnly: true}, {Hardened: true}} {
 		if err := d.checkHardenedWorkspace(small); err != nil {
 			t.Errorf("%+v: small workspace should pass: %v", d, err)
 		}
@@ -226,7 +226,7 @@ func TestCheckHardenedWorkspace_GatedOnHardeningFlags(t *testing.T) {
 	if err := (ContainerRunner{}).checkHardenedWorkspace(missing); err != nil {
 		t.Errorf("default mode must be a no-op, got %v", err)
 	}
-	if err := (ContainerRunner{HardenedRootlessRuntime: true}).checkHardenedWorkspace(missing); err == nil {
+	if err := (ContainerRunner{HardenedRuntimeOnly: true}).checkHardenedWorkspace(missing); err == nil {
 		t.Error("--hardened-runtime-only must run the workspace cap check")
 	}
 	if err := (ContainerRunner{Hardened: true}).checkHardenedWorkspace(missing); err == nil {

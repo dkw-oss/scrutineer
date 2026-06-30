@@ -96,7 +96,7 @@ type flags struct {
 	runtime               string
 	selinux               string
 	hardened              bool
-	hardenedRootless      bool
+	hardenedRuntimeOnly   bool
 	runnerImage           string
 	profilesDir           string
 	skillsRepo            string
@@ -142,8 +142,8 @@ func registerFlags(fs *flag.FlagSet, f *flags) {
 	fs.BoolVar(&f.noContainer, "no-container", false, "disable the containerised runner and run claude directly on the host (no isolation), even if a container runtime is available")
 	fs.BoolVar(&f.noContainer, "no-docker", false, "deprecated alias for --no-container")
 	fs.BoolVar(&f.hardened, "hardened", false, "strict sandbox mode: container runtime required (no --no-container fallback), egress restricted to *.anthropic.com + host skill API, read-only rootfs, internal network")
-	fs.BoolVar(&f.hardenedRootless, "hardened-runtime-only", false, "the non-network half of --hardened (read-only rootfs + no-new-privileges + 2 GiB post-clone workspace cap) WITHOUT the per-scan --internal network, so it works under rootless podman where --hardened cannot; --cap-drop ALL + non-root user + tmpfs apply regardless. Implied by --hardened")
-	fs.BoolVar(&f.hardenedRootless, "hardened-rootless-runtime", false, "deprecated alias for --hardened-runtime-only")
+	fs.BoolVar(&f.hardenedRuntimeOnly, "hardened-runtime-only", false, "the non-network half of --hardened (read-only rootfs + no-new-privileges + 2 GiB post-clone workspace cap) WITHOUT the per-scan --internal network, so it works under rootless podman where --hardened cannot; --cap-drop ALL + non-root user + tmpfs apply regardless. Implied by --hardened")
+	fs.BoolVar(&f.hardenedRuntimeOnly, "hardened-rootless-runtime", false, "deprecated alias for --hardened-runtime-only")
 	fs.StringVar(&f.runnerImage, "runner-image", worker.DefaultRunnerImage, "container image for per-job containers (a custom image needs curl, and under rootless --hardened the scrutineer binary for the egress sidecar; build from Dockerfile.runner)")
 	fs.StringVar(&f.profilesDir, "profiles-dir", "docker/profiles", "directory containing per-ecosystem runner profiles (Dockerfile per profile); empty disables profiles")
 	fs.StringVar(&f.skillsRepo, "skills-repo", "", "clone skills on startup; owner/repo[@ref] or https://host/path[@ref]")
@@ -190,12 +190,12 @@ func (f *flags) merge(cfg *config.Config) {
 		f.hardened = *cfg.Hardened
 	}
 	// hardened_runtime_only, with the deprecated hardened_rootless_runtime alias.
-	hardenedRuntimeOnly := cfg.HardenedRuntimeOnly
-	if hardenedRuntimeOnly == nil {
-		hardenedRuntimeOnly = cfg.HardenedRootlessRuntime
+	cfgRuntimeOnly := cfg.HardenedRuntimeOnly
+	if cfgRuntimeOnly == nil {
+		cfgRuntimeOnly = cfg.HardenedRootlessRuntime
 	}
-	if hardenedRuntimeOnly != nil && !f.set["hardened-runtime-only"] && !f.set["hardened-rootless-runtime"] {
-		f.hardenedRootless = *hardenedRuntimeOnly
+	if cfgRuntimeOnly != nil && !f.set["hardened-runtime-only"] && !f.set["hardened-rootless-runtime"] {
+		f.hardenedRuntimeOnly = *cfgRuntimeOnly
 	}
 	if cfg.RunnerImage != "" && !f.set["runner-image"] {
 		f.runnerImage = cfg.RunnerImage
@@ -594,7 +594,7 @@ func setupRunner(f *flags, cfg *config.Config, log *slog.Logger) (worker.SkillRu
 	if f.hardened && f.noContainer {
 		return nil, "", fmt.Errorf("--hardened requires a container runtime; remove --no-container")
 	}
-	if f.hardenedRootless && f.noContainer {
+	if f.hardenedRuntimeOnly && f.noContainer {
 		log.Warn("--hardened-runtime-only has no effect with --no-container (no container to harden)")
 	}
 	if f.noContainer {
@@ -608,7 +608,7 @@ func setupRunner(f *flags, cfg *config.Config, log *slog.Logger) (worker.SkillRu
 		}
 		return nil, "", fmt.Errorf("%s not available: install and start it, or pass --no-container to run without containerisation (no isolation)", f.runtime)
 	}
-	if err := rt.HardeningSupportError(f.hardenedRootless); err != nil {
+	if err := rt.HardeningSupportError(f.hardenedRuntimeOnly); err != nil {
 		return nil, "", err
 	}
 	if rt.Bin == "apple" {
@@ -681,24 +681,24 @@ func setupRunner(f *flags, cfg *config.Config, log *slog.Logger) (worker.SkillRu
 		"egress_proxy_port", port, "egress_allow", len(allow),
 		"container_host", apiHost, "host_gateway_ipv4", gwIP, "hardened", f.hardened,
 		"egress_sidecar", egress.GatewayIP != "",
-		"hardened_runtime_only", f.hardenedRootless, "selinux_relabel", relabel)
+		"hardened_runtime_only", f.hardenedRuntimeOnly, "selinux_relabel", relabel)
 	// Skills inside the container reach the host via the runtime's host endpoint,
 	// which the egress proxy rewrites to 127.0.0.1 when dialing the app.
 	apiBase = "http://" + net.JoinHostPort(apiHost, addrPort(f.addr)) + "/api"
 	return worker.ContainerRunner{
-		Image:                   f.runnerImage,
-		Effort:                  f.effort,
-		ProxyURL:                worker.ProxyURLForHost(token, apiHost, port),
-		FullClone:               f.fullClone(),
-		MaxTurns:                f.maxTurns,
-		AnthropicBaseURL:        f.anthropicBaseURL,
-		HostGatewayIP:           gwIP,
-		ProfilesDir:             f.profilesDir,
-		Hardened:                f.hardened,
-		HardenedRootlessRuntime: f.hardenedRootless,
-		Runtime:                 rt,
-		SELinuxRelabel:          relabel,
-		Egress:                  egress,
+		Image:               f.runnerImage,
+		Effort:              f.effort,
+		ProxyURL:            worker.ProxyURLForHost(token, apiHost, port),
+		FullClone:           f.fullClone(),
+		MaxTurns:            f.maxTurns,
+		AnthropicBaseURL:    f.anthropicBaseURL,
+		HostGatewayIP:       gwIP,
+		ProfilesDir:         f.profilesDir,
+		Hardened:            f.hardened,
+		HardenedRuntimeOnly: f.hardenedRuntimeOnly,
+		Runtime:             rt,
+		SELinuxRelabel:      relabel,
+		Egress:              egress,
 	}, apiBase, nil
 }
 

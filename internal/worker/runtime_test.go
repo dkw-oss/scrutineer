@@ -139,10 +139,10 @@ func TestContainerRuntimeCapabilityFlags(t *testing.T) {
 // shells out to a live runtime.
 func TestHardeningSupportError(t *testing.T) {
 	tests := []struct {
-		name             string
-		rt               ContainerRuntime
-		hardenedRootless bool
-		wantErr          bool
+		name                string
+		rt                  ContainerRuntime
+		hardenedRuntimeOnly bool
+		wantErr             bool
 	}{
 		{"docker hardened-rootless", ContainerRuntime{Bin: "docker"}, true, false},
 		{"podman rootless hardened-rootless", ContainerRuntime{Bin: "podman", Rootless: true}, true, false},
@@ -151,9 +151,9 @@ func TestHardeningSupportError(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := tc.rt.HardeningSupportError(tc.hardenedRootless)
+			err := tc.rt.HardeningSupportError(tc.hardenedRuntimeOnly)
 			if (err != nil) != tc.wantErr {
-				t.Errorf("HardeningSupportError(%v) err = %v, wantErr %v", tc.hardenedRootless, err, tc.wantErr)
+				t.Errorf("HardeningSupportError(%v) err = %v, wantErr %v", tc.hardenedRuntimeOnly, err, tc.wantErr)
 			}
 		})
 	}

@@ -162,7 +162,7 @@ func TestRegisterFlags_noContainerAliasParsesFromArgv(t *testing.T) {
 func TestRegisterFlags_hardenedRuntimeOnlyAliasParsesFromArgv(t *testing.T) {
 	// Both the canonical --hardened-runtime-only and the deprecated
 	// --hardened-rootless-runtime alias must parse off the command line and set
-	// the same hardenedRootless field, so existing
+	// the same hardenedRuntimeOnly field, so existing
 	// `scrutineer --hardened-rootless-runtime ...` invocations keep working.
 	for _, name := range []string{"--hardened-runtime-only", "--hardened-rootless-runtime"} {
 		f := &flags{}
@@ -171,8 +171,8 @@ func TestRegisterFlags_hardenedRuntimeOnlyAliasParsesFromArgv(t *testing.T) {
 		if err := fs.Parse([]string{name}); err != nil {
 			t.Fatalf("Parse(%q): %v", name, err)
 		}
-		if !f.hardenedRootless {
-			t.Errorf("%s did not set hardenedRootless", name)
+		if !f.hardenedRuntimeOnly {
+			t.Errorf("%s did not set hardenedRuntimeOnly", name)
 		}
 	}
 }
@@ -182,13 +182,13 @@ func TestFlagsMerge_hardenedRuntimeOnlyConfigAlias(t *testing.T) {
 	// canonical hardened_runtime_only is absent.
 	legacy := &flags{}
 	legacy.merge(&config.Config{HardenedRootlessRuntime: new(true)})
-	if !legacy.hardenedRootless {
+	if !legacy.hardenedRuntimeOnly {
 		t.Error("deprecated config hardened_rootless_runtime was ignored")
 	}
 	// The canonical key takes precedence over the deprecated alias.
 	both := &flags{}
 	both.merge(&config.Config{HardenedRuntimeOnly: new(false), HardenedRootlessRuntime: new(true)})
-	if both.hardenedRootless {
+	if both.hardenedRuntimeOnly {
 		t.Error("hardened_runtime_only should take precedence over hardened_rootless_runtime")
 	}
 }
