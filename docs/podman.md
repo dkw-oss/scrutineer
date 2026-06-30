@@ -95,7 +95,8 @@ Why a sidecar is needed here and nowhere else:
   boundary and `--internal` cuts exactly that path, so a host proxy is
   unreachable. The proxy instead runs as a container (`scrutineer proxy`, from
   the runner image) attached to **both** the per-scan `--internal` network (the
-  scan reaches it by name) and the default network (it reaches `*.anthropic.com`
+  scan reaches it by IP; that network is `--disable-dns`) and the default bridge
+  network (it reaches `*.anthropic.com`
   and, via the host-gateway, the host skill API). The scan stays internal-only
   and reaches *only* the sidecar; the sidecar enforces the allowlist and forwards
   out its egress leg. Enforced egress then works without the scan ever needing to

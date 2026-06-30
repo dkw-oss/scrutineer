@@ -16,12 +16,14 @@ the rootless network backend.
 
 Under rootless podman `--hardened`, the scan container is attached to a per-scan
 `--internal` network with no route out. scrutineer starts a sidecar
-(`scrutineer proxy`, run from the **runner image**) on the default network, then
-connects it to the `--internal` network too. The scan points `HTTPS_PROXY` at the
-sidecar by name (`scrutineer-proxy-<scan_id>:3128`); the sidecar enforces the
-allowlist and forwards out its default-network leg, reaching the host skill API
-via the `host.docker.internal` → host-gateway alias. The scan never needs to
-reach the host directly.
+(`scrutineer proxy`, run from the **runner image**) on the default bridge network,
+then connects it to the `--internal` network too. That `--internal` network is
+created with `--disable-dns` — its embedded resolver can't forward external lookups
+and would shadow the sidecar's working one — so the scan resolves no names and
+points `HTTPS_PROXY` at the sidecar's **IP** on the network (`<ip>:3128`), dialing
+it directly. The sidecar enforces the allowlist and forwards out its bridge leg,
+reaching the host skill API via the `host.docker.internal` → host-gateway alias.
+The scan never needs to reach the host directly.
 
 ### What about UDP / DNS?
 
@@ -35,10 +37,10 @@ just as it didn't under the host-proxy path:
   on its egress leg, not by the scan: with `HTTPS_PROXY` set the scan sends the
   *hostname* to the proxy in the `CONNECT`, so it never resolves upstreams
   itself.
-- **The only name the scan resolves** is the sidecar's
-  (`scrutineer-proxy-<scan_id>`), served by the network's embedded DNS
-  (aardvark-dns) *inside* the `--internal` network — intra-network traffic that
-  `--internal` permits, not external egress.
+- **The scan resolves no names at all**: the `--internal` network is created with
+  `--disable-dns` and the scan reaches the sidecar by its `--internal` IP, so it
+  needs no resolver — which also keeps that non-forwarding resolver from shadowing
+  the sidecar's own upstream lookups.
 
 So `--internal` correctly blocks **all** external egress including UDP (QUIC/
 HTTP3, stray DNS), and nothing legitimate breaks. This matches the existing
@@ -47,14 +49,16 @@ skill that genuinely needs outbound UDP, it would need a different transport tha
 this proxy — not in scope here.
 
 One thing the sidecar *does* shift: upstream DNS is resolved by the **sidecar
-container**, not the host (the host proxy resolved on the host). On most rootless
-setups the container inherits a working resolver via pasta/aardvark, but a host
-whose resolver isn't propagated into the rootless netns (split-horizon, VPN, or
-a `127.0.0.53` stub that isn't forwarded) could resolve on the host yet fail in
-the sidecar. The sidecar guards this: before it serves, it confirms it can reach
-a DNS resolver for an allowlisted upstream and **refuses to start (fail closed)**
-otherwise, so a broken netns resolver surfaces as a clear scan refusal rather
-than a mid-scan model-call failure.
+container**, not the host (the host proxy resolved on the host). The sidecar uses
+the default bridge's resolver (the pasta forwarder, which forwards to the host's
+real upstream) — not the `--internal` resolver, which is disabled precisely because
+it can't forward externally. A host whose resolver isn't propagated into the
+rootless netns (split-horizon, VPN, or a `127.0.0.53` stub that isn't forwarded)
+could still resolve on the host yet fail in the sidecar. The sidecar guards this:
+before it serves, it confirms it can **actually resolve** an allowlisted upstream
+— a resolver that only answers NXDOMAIN counts as failure — and **refuses to start
+(fail closed)** otherwise, so a broken netns resolver surfaces as a clear scan
+refusal rather than a mid-scan model-call failure.
 
 ## Version requirements
 
@@ -64,7 +68,7 @@ than a mid-scan model-call failure.
 | **podman** (recommended) | **5.0** | Default rootless backend becomes **pasta**, which maps the host with `--map-host-loopback` so the sidecar can reach the loopback-bound skill API. |
 | **pasta (passt)** | a build with `--map-host-loopback` | The host-API leg: the skill API listens on `127.0.0.1`, reachable from the sidecar only if the backend forwards host-gateway to host loopback. |
 | **slirp4netns** | host-loopback enabled | Alternative backend; podman enables host-loopback for `host.containers.internal`. |
-| **netavark + aardvark-dns** | podman ≥ 4.0 (covered by 4.7) | The scan resolves the sidecar by **name** on the `--internal` network via the network's embedded DNS. |
+| **netavark** | podman ≥ 4.0 (covered by 4.7) | Manages the default bridge and per-scan `--internal` networks the sidecar is dual-homed on. The scan reaches the sidecar by its `--internal` IP (that network is `--disable-dns`), so no embedded name resolution is needed. |
 
 Check what you have:
 
@@ -249,9 +253,9 @@ go test -tags podman -run TestIntegration -count=1 -v ./internal/worker/
 |---|---|---|
 | Startup warning: host-gateway did not resolve under rootless podman | podman < 4.7 or no host-gateway wiring | Upgrade to podman ≥ 4.7; check the rootless network backend. |
 | Sidecar log: `refusing to start: host skill API ... unreachable`; scan refused with `sidecar ... exited before becoming reachable` | Backend doesn't forward host-gateway to host loopback (Step 1) | Upgrade to podman ≥ 5.0 / pasta with `--map-host-loopback`; or use `--hardened-runtime-only` / rootful / docker. |
-| Sidecar log: `refusing to start: sidecar cannot reach a DNS resolver ...`; scan refused | The rootless netns has no working DNS resolver for upstreams (host has one, container doesn't) | Check the rootless backend's DNS (pasta/aardvark, `/etc/resolv.conf` propagation). |
+| Sidecar log: `refusing to start: ... cannot reach a DNS resolver ...` or `... returned NXDOMAIN for every allowlisted upstream ...`; scan refused | The sidecar can't resolve upstreams — resolver unreachable, or it answers but can't forward externally (e.g. a `127.0.0.53` stub not reachable from the rootless netns) | Check the bridge resolver / pasta forwarder and `/etc/resolv.conf` propagation. |
 | Startup fails: `runner image ... is missing the scrutineer binary ... rebuild it from Dockerfile.runner` | The deployed runner image predates the sidecar (no `scrutineer` baked in), or a custom image lacks it | Rebuild/pull the runner image from the current `Dockerfile.runner`. |
-| Verification: `internal network ... cannot reach the egress proxy sidecar` | Sidecar didn't come up in time, or `--internal` DNS isn't resolving its name | Check `podman logs scrutineer-proxy-<id>`; confirm netavark + aardvark-dns. |
+| Verification: `internal network ... cannot reach the egress proxy sidecar` | Sidecar didn't come up in time, or it couldn't be reached at its `--internal` IP | Check `podman logs scrutineer-proxy-<id>`; confirm the sidecar attached to the per-scan network. |
 | Verification: `did not block external egress` | `--internal` isn't isolating egress on this backend | Backend/version issue; do not run hardened here. |
 | `runner image ... lacks curl` | Custom runner image missing curl (hardened verification needs it) | Use an image built from `Dockerfile.runner`. |
 

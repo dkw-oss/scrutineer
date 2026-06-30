@@ -118,8 +118,8 @@ const proxySidecarPrefix = "scrutineer-proxy-"
 
 // proxySidecarPort is the fixed port the egress proxy sidecar listens on inside
 // its own network namespace. It does not collide with anything: each sidecar is
-// alone in its container, and the scan reaches it by name on the --internal
-// network (e.g. scrutineer-proxy-7:3128), not on a shared host port.
+// alone in its container, and the scan reaches it by its --internal IP (e.g.
+// 10.89.1.2:3128), not on a shared host port.
 const proxySidecarPort = "3128"
 
 // proxySidecarReadyTimeout bounds how long verifyHardenedNetwork waits for the
@@ -669,6 +669,16 @@ func dirSize(root string) (int64, error) {
 	return total, err
 }
 
+// hardenedNetworkCreateArgs builds the `network create` args for the per-scan
+// --internal network. --disable-dns is load-bearing: a sidecar later connected to
+// this network must not inherit its aardvark resolver, which on an --internal
+// network cannot forward external lookups and answers NXDOMAIN first, shadowing
+// the sidecar's working bridge resolver. The scan dials the sidecar by IP, so the
+// network needs no name resolution of its own.
+func hardenedNetworkCreateArgs(name string) []string {
+	return []string{"network", "create", "--internal", "--disable-dns", "--", name}
+}
+
 // EnsureHardenedNetwork creates an internal container network with the
 // given name if it does not already exist. --internal blocks routes
 // to external networks; the container can still reach the host via
@@ -680,12 +690,7 @@ func EnsureHardenedNetwork(rt ContainerRuntime, name string) error {
 	if out, err := exec.Command(rt.bin(), "network", "inspect", "--", name).Output(); err == nil && len(out) > 0 {
 		return nil
 	}
-	// --disable-dns: a sidecar later connected to this network must not inherit
-	// its aardvark resolver. On an --internal network that resolver cannot forward
-	// external lookups and answers NXDOMAIN first, which would shadow the sidecar's
-	// working bridge resolver. The scan dials the sidecar by IP, so the network
-	// needs no name resolution of its own.
-	cmd := exec.Command(rt.bin(), "network", "create", "--internal", "--disable-dns", "--", name)
+	cmd := exec.Command(rt.bin(), hardenedNetworkCreateArgs(name)...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%s network create --internal %s: %w: %s", rt.bin(), name, err, strings.TrimSpace(string(out)))
 	}
@@ -953,7 +958,7 @@ func VerifyProxyBinary(ctx context.Context, rt ContainerRuntime, image string) e
 //	(a) a container with no proxy env must FAIL to reach a routable public IP
 //	    (a literal address, so a pass means no IP-level egress rather than
 //	    merely blocked DNS); and
-//	(b) a container must still reach the egress proxy -- the sidecar by name on
+//	(b) a container must still reach the egress proxy -- the sidecar by its IP on
 //	    this network, or the host proxy through the gateway when there is no
 //	    sidecar.
 //
@@ -1006,8 +1011,8 @@ func (d ContainerRunner) verifyHostProxyReachable(hn hardenedNet, image string) 
 }
 
 // verifyProxySidecarReachable runs probe (b) for the sidecar path: a throwaway
-// container on the --internal network must reach the egress proxy
-// sidecar by name. The sidecar holds its listener until it has confirmed it can
+// container on the --internal network must reach the egress proxy sidecar at its
+// --internal IP. The sidecar holds its listener until it has confirmed it can
 // reach the host skill API, so reachability here transitively proves the whole
 // scan -> sidecar -> host-API chain. It retries because the sidecar may still be
 // running that upstream check when verification starts; if the sidecar exits
@@ -1089,8 +1094,8 @@ func (rt ContainerRuntime) hardenedProxyReachArgs(network, gatewayIP, proxyPort,
 
 // sidecarReachArgs builds the `run` args for the sidecar variant of probe (b): a
 // throwaway container on the per-scan --internal network that must reach the
-// egress proxy sidecar at endpoint (its container name:port, resolved by the
-// network's embedded DNS -- no --add-host needed). curl exit 0 (the proxy
+// egress proxy sidecar at endpoint (its IP:port on that network; the network runs
+// no DNS, so no name resolution or --add-host is needed). curl exit 0 (the proxy
 // answers, e.g. 407 without auth) means the in-network path to the sidecar is
 // open, which by the sidecar's readiness gate also means the host API is
 // reachable through it.

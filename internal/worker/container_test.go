@@ -683,9 +683,10 @@ func TestStartProxySidecar_RequiresGatewayIP(t *testing.T) {
 }
 
 func TestSidecarReachArgs(t *testing.T) {
-	// Probe (b), sidecar variant: curl the sidecar by name:port on the --internal
-	// network, no --add-host (the network's embedded DNS resolves the name).
-	args := sidecarReachArgs("scrutineer-hardened-7", "scrutineer-proxy-7:3128", "img:latest")
+	// Probe (b), sidecar variant: curl the sidecar by IP:port on the --internal
+	// network (that network is --disable-dns, so the scan reaches it by IP, not by
+	// name); no --add-host.
+	args := sidecarReachArgs("scrutineer-hardened-7", "10.89.1.2:3128", "img:latest")
 	if !hasAdjacent(args, "--network", "scrutineer-hardened-7") {
 		t.Errorf("missing --network: %v", args)
 	}
@@ -697,13 +698,13 @@ func TestSidecarReachArgs(t *testing.T) {
 			t.Errorf("sidecar reach probe must not wire --add-host: %v", args)
 		}
 	}
-	if !strings.Contains(strings.Join(args, " "), "http://scrutineer-proxy-7:3128/") {
+	if !strings.Contains(strings.Join(args, " "), "http://10.89.1.2:3128/") {
 		t.Errorf("reach probe should curl the sidecar endpoint: %v", args)
 	}
 }
 
 func TestBuildRunArgs_SidecarProxyURL(t *testing.T) {
-	// In sidecar mode HTTPS_PROXY points at the sidecar by name on the --internal
+	// In sidecar mode HTTPS_PROXY points at the sidecar by IP on the --internal
 	// network, built per-scan from the endpoint -- NOT the process-wide host
 	// proxy URL, which must not leak into the scan.
 	d := ContainerRunner{
@@ -712,10 +713,10 @@ func TestBuildRunArgs_SidecarProxyURL(t *testing.T) {
 		ProxyURL: "http://scrutineer:tok@host.docker.internal:55000",
 		Egress:   EgressSidecarConfig{Token: "tok"},
 	}
-	hn := hardenedNet{name: "scrutineer-hardened-7", proxyEndpoint: "scrutineer-proxy-7:3128"}
+	hn := hardenedNet{name: "scrutineer-hardened-7", proxyEndpoint: "10.89.1.2:3128", proxyName: "scrutineer-proxy-7"}
 	args := d.buildRunArgs("/work/abs", "img:latest", hn, "")
 
-	const want = "http://scrutineer:tok@scrutineer-proxy-7:3128"
+	const want = "http://scrutineer:tok@10.89.1.2:3128"
 	for _, env := range []string{"HTTPS_PROXY=" + want, "HTTP_PROXY=" + want, "ALL_PROXY=" + want} {
 		if !hasAdjacent(args, "-e", env) {
 			t.Errorf("expected sidecar %s in %v", env, args)
@@ -739,6 +740,23 @@ func TestBuildRunArgs_HostProxyURLWhenNoSidecar(t *testing.T) {
 	args := d.buildRunArgs("/work/abs", "img:latest", hardenedNet{}, "")
 	if !hasAdjacent(args, "-e", "HTTPS_PROXY=http://scrutineer:tok@host.docker.internal:55000") {
 		t.Errorf("expected the host proxy URL in %v", args)
+	}
+}
+
+func TestHardenedNetworkCreateArgs(t *testing.T) {
+	args := hardenedNetworkCreateArgs("scrutineer-hardened-9")
+	// --internal isolates egress; --disable-dns keeps the network's non-forwarding
+	// resolver out of any connected sidecar (it would NXDOMAIN external lookups and
+	// shadow the sidecar's working bridge resolver).
+	if !slices.Contains(args, "--internal") {
+		t.Errorf("missing --internal: %v", args)
+	}
+	if !slices.Contains(args, "--disable-dns") {
+		t.Errorf("missing --disable-dns: %v", args)
+	}
+	// The name comes last, after "--", so it can never be read as a flag.
+	if tail := args[len(args)-2:]; tail[0] != "--" || tail[1] != "scrutineer-hardened-9" {
+		t.Errorf("name must be the final arg after --: %v", args)
 	}
 }
 
