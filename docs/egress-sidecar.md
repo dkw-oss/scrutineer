@@ -101,7 +101,7 @@ kill $HOST_API
 - `BLOCKED` → it does **not**. scrutineer will **refuse** hardened scans here
   (fail closed). If you are already on podman ≥ 5.0 with pasta, it is most likely
   suppressing the host-loopback mapping — re-enable it (next section). Otherwise
-  switch the backend, or use `--hardened-rootless-runtime` (cooperative egress) /
+  switch the backend, or use `--hardened-runtime-only` (cooperative egress) /
   rootful podman / docker.
 
 ### Re-enabling host-loopback under pasta
@@ -248,7 +248,7 @@ go test -tags podman -run TestIntegration -count=1 -v ./internal/worker/
 | Symptom | Meaning | Action |
 |---|---|---|
 | Startup warning: host-gateway did not resolve under rootless podman | podman < 4.7 or no host-gateway wiring | Upgrade to podman ≥ 4.7; check the rootless network backend. |
-| Sidecar log: `refusing to start: host skill API ... unreachable`; scan refused with `sidecar ... exited before becoming reachable` | Backend doesn't forward host-gateway to host loopback (Step 1) | Upgrade to podman ≥ 5.0 / pasta with `--map-host-loopback`; or use `--hardened-rootless-runtime` / rootful / docker. |
+| Sidecar log: `refusing to start: host skill API ... unreachable`; scan refused with `sidecar ... exited before becoming reachable` | Backend doesn't forward host-gateway to host loopback (Step 1) | Upgrade to podman ≥ 5.0 / pasta with `--map-host-loopback`; or use `--hardened-runtime-only` / rootful / docker. |
 | Sidecar log: `refusing to start: sidecar cannot reach a DNS resolver ...`; scan refused | The rootless netns has no working DNS resolver for upstreams (host has one, container doesn't) | Check the rootless backend's DNS (pasta/aardvark, `/etc/resolv.conf` propagation). |
 | Startup fails: `runner image ... is missing the scrutineer binary ... rebuild it from Dockerfile.runner` | The deployed runner image predates the sidecar (no `scrutineer` baked in), or a custom image lacks it | Rebuild/pull the runner image from the current `Dockerfile.runner`. |
 | Verification: `internal network ... cannot reach the egress proxy sidecar` | Sidecar didn't come up in time, or `--internal` DNS isn't resolving its name | Check `podman logs scrutineer-proxy-<id>`; confirm netavark + aardvark-dns. |

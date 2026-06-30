@@ -41,7 +41,7 @@
 # gets --userns=keep-id so scan output stays host-owned; podman >= 4.7 and an
 # /etc/subuid range are required. There is no auto-detection -- a non-docker
 # host must set this explicitly. Apple's container runtime (experimental)
-# supports ordinary and --hardened scans; --hardened-rootless-runtime is a
+# supports ordinary and --hardened scans; --hardened-runtime-only is a
 # rootless-podman concept and is refused there. See docs/apple.md.
 # runtime: docker
 
@@ -77,7 +77,7 @@
 # non-root user + /tmp tmpfs apply in every mode regardless. Implied by hardened.
 # A read-only rootfs can break custom profile images that write outside /work
 # and /tmp.
-# hardened_rootless_runtime: false
+# hardened_runtime_only: false
 
 # Container image used for per-scan containers.
 # runner_image: ghcr.io/alpha-omega-security/scrutineer-runner:latest

@@ -113,11 +113,11 @@ func (rt ContainerRuntime) supportsNoNewPrivileges() bool {
 // or credentials. Apple's own untrusted-code sandbox (containerization's
 // examples/sandboxy) hardens exactly this way -- VM + read-only mounts +
 // host-only network + allowlisting proxy, no no-new-privileges. So --hardened is
-// accepted; only --hardened-rootless-runtime (the rootless-podman non-network
+// accepted; only --hardened-runtime-only (the rootless-podman non-network
 // half) is refused, since Apple's network half works. See docs/apple.md.
 func (rt ContainerRuntime) HardeningSupportError(hardenedRootless bool) error {
 	if rt.Bin == runtimeApple && hardenedRootless {
-		return fmt.Errorf("--runtime apple does not support --hardened-rootless-runtime " +
+		return fmt.Errorf("--runtime apple does not support --hardened-runtime-only " +
 			"(that is the rootless-podman non-network half); use --hardened, whose " +
 			"--internal host-only network Apple's container runtime supports")
 	}

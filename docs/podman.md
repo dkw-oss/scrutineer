@@ -140,7 +140,7 @@ hardened scan).
 
 Weakest change to strongest isolation:
 
-1. **`--hardened-rootless-runtime`** *(recommended where the sidecar can't run)*
+1. **`--hardened-runtime-only`** *(recommended where the sidecar can't run)*
    — keep a read-only rootfs and `no-new-privileges` without the `--internal`
    network (see the next subsection). You keep the non-root-equivalent runtime
    and, on an enforcing host, SELinux `:z` confinement; you give up only enforced
@@ -151,12 +151,12 @@ Weakest change to strongest isolation:
    again, which is the main reason to prefer rootless. Reasonable only on a
    dedicated/throwaway host.
 
-### `--hardened-rootless-runtime`: the non-network half of hardened
+### `--hardened-runtime-only`: the non-network half of hardened
 
 Three of hardened mode's controls have **no network dependency** — a read-only
 rootfs, `no-new-privileges`, and the post-clone workspace cap — so they don't
 need `--internal` and work fine under rootless podman's default network.
-`--hardened-rootless-runtime` (config `hardened_rootless_runtime: true`) applies
+`--hardened-runtime-only` (config `hardened_runtime_only: true`) applies
 exactly those, independently of `--hardened`:
 
 - `--read-only` on the container rootfs. Writable paths remain `/work`, the
@@ -173,7 +173,7 @@ It is the recommended add-on for rootless deployments that can't use full
 rootful podman too — but `--hardened` already implies all of it there, so the
 flag is redundant with (and harmless alongside) `--hardened`. It has no effect
 under `--no-container` (there is no container; startup warns if you combine them),
-and startup logs `hardened_rootless_runtime=<bool>` so you can confirm it is
+and startup logs `hardened_runtime_only=<bool>` so you can confirm it is
 active.
 
 **Caveat — custom profile images.** A read-only rootfs breaks any runner image
@@ -185,7 +185,7 @@ hardening is opt-in rather than always-on.
 
 ### What each mode applies
 
-| control | default | `--hardened-rootless-runtime` | `--hardened` |
+| control | default | `--hardened-runtime-only` | `--hardened` |
 |---|:---:|:---:|:---:|
 | `--cap-drop ALL` | ✓ | ✓ | ✓ |
 | non-root `--user <uid>:<gid>` | ✓ | ✓ | ✓ |
@@ -195,13 +195,13 @@ hardening is opt-in rather than always-on.
 | 2 GiB post-clone workspace cap (T9 DoS guard) | ✗ | ✓ | ✓ |
 | per-scan `--internal` network — enforced egress + inter-scan isolation | ✗ | ✗ | ✓ † |
 
-The top four rows are the unconditional baseline; `--hardened-rootless-runtime`
+The top four rows are the unconditional baseline; `--hardened-runtime-only`
 adds the next two; full `--hardened` adds the last row on top.
 
 † Under rootless podman the last row is delivered by the per-scan egress proxy
 sidecar, which requires the network backend to forward host-gateway to the host
 loopback; where it does not, `--hardened` is refused (fail closed)
-and `--hardened-rootless-runtime` is the fallback. See [`--hardened` under
+and `--hardened-runtime-only` is the fallback. See [`--hardened` under
 rootless podman](#--hardened-under-rootless-podman).
 
 ### What running rootless *without* full `--hardened` gives up
@@ -223,7 +223,7 @@ is that bottom row, which is two things, both network:
   network instead of each getting its own `--internal` network.
 
 So: prefer `--hardened` under rootless (the sidecar makes it work on a modern
-pasta/slirp4netns backend); fall back to `--hardened-rootless-runtime` + SELinux
+pasta/slirp4netns backend); fall back to `--hardened-runtime-only` + SELinux
 where it can't, and rootful podman/docker remains a route to full enforced egress
 without the host-loopback-forwarding requirement.
 
@@ -299,7 +299,7 @@ These are **not** addressed by the podman / rootless runtime and remain open:
    podman](#--hardened-under-rootless-podman)) provided the backend forwards
    host-gateway to the host loopback; where it does not, the scan is refused and
    the operator falls back to cooperative egress with
-   `--hardened-rootless-runtime`.
+   `--hardened-runtime-only`.
 2. **keep-id widens the user namespace to include the operator's uid.** A
    container escape that pivots to that uid could touch host files owned by the
    operator *that are reachable through the bind mounts*. Far better than
@@ -364,7 +364,7 @@ These are **not** addressed by the podman / rootless runtime and remain open:
   network backend that forwards host-gateway to the host loopback (modern pasta
   or slirp4netns); validate this once with [egress-sidecar.md](egress-sidecar.md).
   Where the sidecar can't run, scrutineer refuses hardened scans (fail closed) —
-  fall back to **rootless with `--hardened-rootless-runtime`** (read-only rootfs +
+  fall back to **rootless with `--hardened-runtime-only`** (read-only rootfs +
   no-new-privileges on the always-on `--cap-drop ALL` / non-root / SELinux
   baseline), accepting cooperative egress, or use **rootful podman or docker**
   for `--hardened` without the host-loopback-forwarding requirement.

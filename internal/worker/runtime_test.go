@@ -107,7 +107,7 @@ func TestContainerRuntimeCapabilityFlags(t *testing.T) {
 
 // TestHardeningSupportError locks in the hardening parity: docker and podman
 // accept both modes; apple accepts --hardened (its --internal host-only network
-// is the enforcement, verified per scan) but refuses --hardened-rootless-runtime
+// is the enforcement, verified per scan) but refuses --hardened-runtime-only
 // (the rootless-podman non-network half). This is the gate setupRunner applies
 // at startup; testing it here keeps it covered even though setupRunner itself
 // shells out to a live runtime.

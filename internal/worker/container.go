@@ -189,13 +189,13 @@ func proxyURLWithHost(proxyURL, host string) string {
 }
 
 // HardenedWorkspaceCapBytes caps the per-scan workspace footprint that the
-// hardening modes (--hardened and --hardened-rootless-runtime) tolerate after
+// hardening modes (--hardened and --hardened-runtime-only) tolerate after
 // clone completes. This is a post-clone check, not a clone-time bound: a clone
 // that already exceeds disk capacity fails earlier on its own, so this cap is
 // what hardening will agree to scan, not a guarantee against disk fill during
 // clone (use OS-level disk quotas for that). It is a pure host-side size check
 // with no container/network/rootless dependency, which is why it applies under
-// --hardened-rootless-runtime too. 2 GiB leaves room for genuinely large
+// --hardened-runtime-only too. 2 GiB leaves room for genuinely large
 // legitimate repos.
 const HardenedWorkspaceCapBytes int64 = 2 << 30
 
@@ -423,7 +423,7 @@ func (d ContainerRunner) buildRunArgs(absWork, image string, hnet hardenedNet, c
 		// --hardened, kept separate from the container hardening above because
 		// it does not work under rootless podman (the startup verification
 		// fails closed when it can't reach the host proxy here; see
-		// docs/podman.md). --hardened-rootless-runtime deliberately omits it.
+		// docs/podman.md). --hardened-runtime-only deliberately omits it.
 		args = append(args, "--network", hnet.name)
 	}
 	// In sidecar mode the proxy is a per-scan container reached by name on the
@@ -514,7 +514,7 @@ const profileGuideFileMode os.FileMode = 0o644
 
 // checkHardenedWorkspace returns an error when a hardening mode is on and the
 // cloned workspace exceeds HardenedWorkspaceCapBytes. It applies under both
-// --hardened and --hardened-rootless-runtime (the cap is a host-side size check,
+// --hardened and --hardened-runtime-only (the cap is a host-side size check,
 // not network-coupled), and is a no-op for plain default scans.
 func (d ContainerRunner) checkHardenedWorkspace(workRoot string) error {
 	if !d.Hardened && !d.HardenedRootlessRuntime {

@@ -158,7 +158,7 @@ func TestBuildRunArgs_ContainerHardening(t *testing.T) {
 
 	hasNoNewPrivs := func(args []string) bool { return hasAdjacent(args, "--security-opt", "no-new-privileges") }
 
-	// --hardened-rootless-runtime: read-only + no-new-privileges, but NOT the
+	// --hardened-runtime-only: read-only + no-new-privileges, but NOT the
 	// per-scan --internal network -- that network is the part rootless podman
 	// can't route to the host proxy, and is the whole reason this flag exists.
 	roR := ContainerRunner{HardenedRootlessRuntime: true}.buildRunArgs("/work/abs", "img:latest", hardenedNet{name: net}, "")
@@ -227,7 +227,7 @@ func TestCheckHardenedWorkspace_GatedOnHardeningFlags(t *testing.T) {
 		t.Errorf("default mode must be a no-op, got %v", err)
 	}
 	if err := (ContainerRunner{HardenedRootlessRuntime: true}).checkHardenedWorkspace(missing); err == nil {
-		t.Error("--hardened-rootless-runtime must run the workspace cap check")
+		t.Error("--hardened-runtime-only must run the workspace cap check")
 	}
 	if err := (ContainerRunner{Hardened: true}).checkHardenedWorkspace(missing); err == nil {
 		t.Error("--hardened must run the workspace cap check")
