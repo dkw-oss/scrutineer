@@ -75,15 +75,23 @@ USER root
 # reading and as the valgrind target (ASan and valgrind cannot be combined).
 # GEM_HOME mirrors the ruby profile: gems install into the writable, exec-capable
 # /work mount, not the root-owned image gem dir or the noexec /tmp fallback.
+#
+# ASAN_OPTIONS/UBSAN_OPTIONS here are the BUILD-SAFE variant. The from-source
+# interpreter build below runs an ASan/UBSan-instrumented miniruby for codegen,
+# and that interpreter — deliberately compiled WITHOUT -fno-sanitize-recover —
+# trips benign UB and leaks freely during those short-lived runs. detect_leaks=0
+# and halt_on_error=0 keep that benign, so `make` doesn't abort. The FATAL
+# runtime options (abort_on_error, halt_on_error=1, RUBY_FREE_AT_EXIT) are set
+# LAST, after the build, so they scope to the gem scan — mirroring how the
+# extension CFLAGS further down are set after the interpreter build.
 ENV DEBIAN_FRONTEND=noninteractive \
     PATH=/usr/local/ruby-asan/bin:/work/.gem/bin:/opt/ruby-build/bin:/usr/local/cargo/bin:$PATH \
     GEM_HOME=/work/.gem \
     RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
     RUST_NIGHTLY_VERSION=${RUST_NIGHTLY_VERSION} \
-    RUBY_FREE_AT_EXIT=1 \
-    ASAN_OPTIONS="detect_leaks=0:detect_stack_use_after_return=0:abort_on_error=1:symbolize=1:print_summary=1" \
-    UBSAN_OPTIONS="print_stacktrace=1:print_summary=1:halt_on_error=1"
+    ASAN_OPTIONS="detect_leaks=0:detect_stack_use_after_return=0" \
+    UBSAN_OPTIONS="halt_on_error=0"
 
 # Build toolchain + the headers Ruby links against (openssl, yaml/psych, zlib,
 # ffi, gmp, readline, ncurses, gdbm). gdb/strace/valgrind for triage. The apt
@@ -183,5 +191,17 @@ RUN chmod -R a+rwX /usr/local/ruby-asan "$RUSTUP_HOME" "$CARGO_HOME" \
  && ruby -v 2>&1 | grep -q "ruby 3.4" \
  && ldd /usr/local/ruby-asan/bin/ruby | grep -q libasan \
  && /usr/bin/ruby -v && valgrind --version && cargo --version
+
+# Runtime (gem-scan) sanitizer options — set LAST, after every build and verify
+# step above, so none of them run under these fatal settings. During the
+# from-source interpreter build these MUST stay permissive (see the build-safe
+# ENV near the top): the instrumented miniruby codegen runs leak and tear-down
+# freely and the interpreter trips benign UB, so abort_on_error, halt_on_error=1
+# or RUBY_FREE_AT_EXIT here would abort those healthy runs and fail `make` with
+# exit 2. They belong to the scan, exactly like the extension CFLAGS above scope
+# to gem builds, not the interpreter.
+ENV RUBY_FREE_AT_EXIT=1 \
+    ASAN_OPTIONS="detect_leaks=0:detect_stack_use_after_return=0:abort_on_error=1:symbolize=1:print_summary=1" \
+    UBSAN_OPTIONS="print_stacktrace=1:print_summary=1:halt_on_error=1"
 
 USER runner
