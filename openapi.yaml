@@ -1381,8 +1381,11 @@ components:
       description: |
         Compact repository row used by the unauthenticated JSONL export. This
         intentionally omits large metadata and ecosystems cache blobs.
+        `last_scan` is recency (the newest row in any state, queued included);
+        `last_completed_scan` is the newest run that reached `done` — read the
+        latter for "when was this repository last scanned".
       type: object
-      required: [id, url, name, findings_count, last_scan]
+      required: [id, url, name, findings_count, last_scan, last_completed_scan]
       properties:
         id:             { type: integer, format: int64 }
         url:            { type: string, format: uri }
@@ -1396,6 +1399,12 @@ components:
         updated_at:     { type: string, format: date-time }
         last_scan:
           nullable: true
+          description: |
+            The repository's most recent scan row in any state (highest id),
+            including queued and running rows for work that has not run or
+            finished yet. Check `status` before reading the timestamps:
+            `created_at` is when the row was enqueued, not when anything ran,
+            and `finished_at` stays null until the run stops.
           type: object
           properties:
             id:          { type: integer, format: int64 }
@@ -1404,6 +1413,19 @@ components:
             skill_name:  { type: string }
             commit:      { type: string }
             created_at:  { type: string, format: date-time, nullable: true }
+            finished_at: { type: string, format: date-time, nullable: true }
+        last_completed_scan:
+          nullable: true
+          description: |
+            The repository's most recent scan that reached `done` (highest id
+            with that status), unaffected by anything enqueued since. Null
+            until a scan has completed. `status` is omitted — it is `done` by
+            definition — and `finished_at` is when that run stopped.
+          type: object
+          properties:
+            id:          { type: integer, format: int64 }
+            skill_name:  { type: string }
+            commit:      { type: string }
             finished_at: { type: string, format: date-time, nullable: true }
 
     ExpectedFinding:

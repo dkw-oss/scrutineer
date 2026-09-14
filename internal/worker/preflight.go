@@ -192,11 +192,9 @@ func (w *Worker) prereqStatus(where string, args []any, inFlight []db.ScanStatus
 
 func (w *Worker) failScanPrereqs(scan *db.Scan, skillName, msg string, missing []string) {
 	now := time.Now()
-	scan.Status = db.ScanFailed
-	scan.StatusPriority = db.StatusPriorityFor(db.ScanFailed)
+	db.SetScanStatus(scan, db.ScanFailed, now)
 	scan.Error = msg
 	scan.StartedAt = &now
-	scan.FinishedAt = &now
 	if err := w.DB.Save(scan).Error; err != nil {
 		w.Log.Error("save failed-prereq scan",
 			"scan", scan.ID, "skill", skillName, "err", err)

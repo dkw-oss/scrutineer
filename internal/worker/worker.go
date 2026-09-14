@@ -714,11 +714,8 @@ const OptOutCancelReason = "cancelled: maintainer opted out of federated scannin
 // forbids; the web sweep cannot close that window on its own because a scan
 // can be claimed from the queue while it runs.
 func (w *Worker) cancelOptedOut(scan *db.Scan) {
-	now := time.Now()
-	scan.Status = db.ScanCancelled
-	scan.StatusPriority = db.StatusPriorityFor(db.ScanCancelled)
+	db.SetScanStatus(scan, db.ScanCancelled, time.Now())
 	scan.Error = OptOutCancelReason
-	scan.FinishedAt = &now
 	if err := w.DB.Save(scan).Error; err != nil {
 		w.Log.Error("save opted-out scan", "scan", scan.ID, "err", err)
 		return
@@ -773,15 +770,12 @@ func (w *Worker) startScan(scan *db.Scan) error {
 		backend = br.Backend()
 	}
 	return w.DB.Transaction(func(tx *gorm.DB) error {
+		updates := db.ScanStatusUpdates(db.ScanRunning, "", now, nil)
+		updates["started_at"] = &now
+		updates["log"] = ""
+		updates["backend"] = backend
 		res := tx.Model(&db.Scan{}).Where("id = ? AND status = ?", scan.ID, db.ScanQueued).
-			Updates(map[string]any{
-				"status":          db.ScanRunning,
-				"status_priority": db.StatusPriorityFor(db.ScanRunning),
-				"started_at":      &now,
-				"log":             "",
-				errorColumn:       "",
-				"backend":         backend,
-			})
+			Updates(updates)
 		if res.Error != nil {
 			return res.Error
 		}
@@ -819,8 +813,7 @@ func (w *Worker) startScan(scan *db.Scan) error {
 		if sealed.RowsAffected > 0 {
 			scan.Recipe = recipe
 		}
-		scan.Status = db.ScanRunning
-		scan.StatusPriority = db.StatusPriorityFor(db.ScanRunning)
+		db.SetScanStatus(scan, db.ScanRunning, now)
 		scan.StartedAt = &now
 		scan.Log = ""
 		scan.Error = ""
@@ -837,12 +830,11 @@ func (w *Worker) startScan(scan *db.Scan) error {
 func (w *Worker) finalizeScan(ctx context.Context, scan *db.Scan, report string, err error, timeout time.Duration, emit func(Event), snapshotLog func()) error {
 	// Read before wrap's deferred cleanup drops the entry, so a cancellation
 	// that named a reason keeps it instead of falling back to the operator's.
-	finishScan(ctx, scan, report, err, timeout, w.cancelReason(scan.ID), emit)
+	finishScan(ctx, scan, report, err, timeout, w.cancelReason(scan.ID), w.now(), emit)
 	snapshotLog()
 	if scan.Status == db.ScanDone && !scan.MaxTurnsHit {
 		w.clearSessionStore(scan)
 	}
-	scan.StatusPriority = db.StatusPriorityFor(scan.Status)
 	if eventKind, ok := db.ScanLifecycleEventKind(scan.Status); ok {
 		if saveErr := w.DB.Transaction(func(tx *gorm.DB) error {
 			if err := tx.Save(scan).Error; err != nil {
@@ -967,8 +959,12 @@ func (w *Worker) maybeFireScanFailed(scan *db.Scan) {
 	}
 }
 
-func finishScan(ctx context.Context, scan *db.Scan, report string, err error, timeout time.Duration, cancelReason string, emit func(Event)) {
-	scan.FinishedAt = new(time.Now())
+// finishScan decides the row's outcome from how the run ended, then stamps
+// the derived state columns once after every branch (including
+// finishErroredScan's) has spoken, so no branch can leave a stopped row
+// half-written. at is the worker's injectable clock, not time.Now(), so
+// tests keep governing the timestamps this writes.
+func finishScan(ctx context.Context, scan *db.Scan, report string, err error, timeout time.Duration, cancelReason string, at time.Time, emit func(Event)) {
 	scan.MaxTurnsHit = false
 	switch {
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
@@ -985,8 +981,12 @@ func finishScan(ctx context.Context, scan *db.Scan, report string, err error, ti
 		scan.Status = db.ScanDone
 		scan.Report = report
 	}
+	db.StampScanStatus(scan, at)
 }
 
+// finishErroredScan picks the status for finishScan, its only caller, which
+// stamps the row once it has: the allowlisted exemption in
+// internal/db/scan_status_invariant_test.go.
 func finishErroredScan(scan *db.Scan, report string, err error, emit func(Event)) {
 	scan.Status = db.ScanFailed
 	scan.Error = err.Error()
@@ -1075,12 +1075,7 @@ func (w *Worker) pauseQueuedOnAccountError(triggerID uint) {
 	reason := accountPauseReason(nil)
 	res := w.DB.Model(&db.Scan{}).
 		Where("status = ?", db.ScanQueued).
-		Updates(map[string]any{
-			"status":          db.ScanPaused,
-			"status_priority": db.StatusPriorityFor(db.ScanPaused),
-			errorColumn:       reason,
-			"finished_at":     &now,
-		})
+		Updates(db.ScanStatusUpdates(db.ScanPaused, reason, now, nil))
 	if res.Error != nil {
 		w.Log.Warn("pause-on-account-error failed", "trigger", triggerID, "err", res.Error)
 		return
@@ -1257,14 +1252,8 @@ func (w *Worker) resumeAccountPaused(ctx context.Context) (int, error) {
 	}
 	var resumed int
 	for _, sc := range scans {
-		updates := map[string]any{
-			"status":          db.ScanQueued,
-			"status_priority": db.StatusPriorityFor(db.ScanQueued),
-			errorColumn:       "",
-			"finished_at":     nil,
-			"paused_until":    nil,
-		}
-		res := w.DB.Model(&db.Scan{}).Where("id = ? AND status = ?", sc.ID, db.ScanPaused).Updates(updates)
+		res := w.DB.Model(&db.Scan{}).Where("id = ? AND status = ?", sc.ID, db.ScanPaused).
+			Updates(db.RequeueScanUpdates())
 		if res.Error != nil {
 			return resumed, res.Error
 		}
@@ -1276,14 +1265,9 @@ func (w *Worker) resumeAccountPaused(ctx context.Context) (int, error) {
 			priority = PrioFinding
 		}
 		if err := w.Queue.Enqueue(ctx, sc.Kind, sc.ID, priority); err != nil {
-			now := w.now().UTC()
-			restoreErr := w.DB.Model(&db.Scan{}).Where("id = ?", sc.ID).Updates(map[string]any{
-				"status":          db.ScanPaused,
-				"status_priority": db.StatusPriorityFor(db.ScanPaused),
-				errorColumn:       appendAutoResumeFailure(sc.Error, err),
-				"finished_at":     &now,
-				"paused_until":    sc.PausedUntil,
-			}).Error
+			restoreErr := w.DB.Model(&db.Scan{}).Where("id = ?", sc.ID).
+				Updates(db.ScanStatusUpdates(db.ScanPaused, appendAutoResumeFailure(sc.Error, err),
+					w.now().UTC(), sc.PausedUntil)).Error
 			return resumed, errors.Join(err, restoreErr)
 		}
 		resumed++

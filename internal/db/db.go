@@ -240,7 +240,8 @@ type Scan struct {
 
 	// StatusPriority is a denormalised sort key so the scans index can use
 	// an index instead of evaluating a CASE on every row. 0 = running,
-	// 1 = queued, 2 = everything else. Set by StatusPriorityFor().
+	// 1 = queued, 2 = paused, 3 = terminal. Set by StatusPriorityFor()
+	// through the scan_status.go helpers, never by hand.
 	StatusPriority int
 
 	// Ref is the git ref (branch, tag, commit) to checkout after cloning.
@@ -2127,9 +2128,5 @@ func BackfillFindings(gdb *gorm.DB) {
 func SweepRunning(gdb *gorm.DB) error {
 	return gdb.Model(&Scan{}).
 		Where("status = ?", ScanRunning).
-		Updates(map[string]any{
-			"status":      ScanFailed,
-			"error":       "server restarted during run",
-			"finished_at": new(time.Now()),
-		}).Error
+		Updates(ScanStatusUpdates(ScanFailed, "server restarted during run", time.Now(), nil)).Error
 }

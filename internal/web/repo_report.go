@@ -802,11 +802,16 @@ func shortCommit(c string) string {
 	return c
 }
 
+// formatScanDate renders the UTC day a scan stopped. Report-bearing scans
+// are completed runs, so finished_at is always set (stamped in
+// internal/db/scan_status.go); a row without one has no run date worth
+// printing, and an em dash beats guessing from created_at, which is only
+// when the row was enqueued.
 func formatScanDate(s *db.Scan) string {
-	if s.FinishedAt != nil {
-		return s.FinishedAt.UTC().Format("2006-01-02")
+	if s.FinishedAt == nil {
+		return "—"
 	}
-	return s.CreatedAt.UTC().Format("2006-01-02")
+	return s.FinishedAt.UTC().Format("2006-01-02")
 }
 
 func sanitiseFilename(s string) string {

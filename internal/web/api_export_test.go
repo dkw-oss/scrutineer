@@ -642,7 +642,8 @@ func TestExportRepositories(t *testing.T) {
 		ThreatModel:            "large threat model blob",
 	}
 	s.DB.Create(&repo)
-	deep := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: deepDiveSkillName, Commit: "abc123"}
+	finished := time.Date(2026, 2, 3, 4, 5, 6, 0, time.UTC)
+	deep := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: deepDiveSkillName, Commit: "abc123", FinishedAt: &finished}
 	s.DB.Create(&deep)
 	s.DB.Create(&db.Finding{ScanID: deep.ID, RepositoryID: repo.ID, Title: "SSRF", Severity: sevHigh, Status: db.FindingNew})
 	s.DB.Create(&db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanRunning, SkillName: "repo-overview", Commit: "def456"})
@@ -660,7 +661,7 @@ func TestExportRepositories(t *testing.T) {
 		t.Fatalf("got %d rows, want 1", len(rows))
 	}
 	row := rows[0]
-	for _, k := range []string{"id", "url", "name", "full_name", "owner", "languages", "stars", "findings_count", "last_scan"} {
+	for _, k := range []string{"id", "url", "name", "full_name", "owner", "languages", "stars", "findings_count", "last_scan", "last_completed_scan"} {
 		if _, ok := row[k]; !ok {
 			t.Errorf("repository export missing %q", k)
 		}
@@ -674,6 +675,17 @@ func TestExportRepositories(t *testing.T) {
 	}
 	if last["status"] != string(db.ScanRunning) || last["skill_name"] != "repo-overview" || last["commit"] != "def456" {
 		t.Errorf("last_scan = %#v", last)
+	}
+	// The newest row is mid-run, so "last scanned" is the older done run.
+	completed, ok := row["last_completed_scan"].(map[string]any)
+	if !ok {
+		t.Fatalf("last_completed_scan = %#v, want object", row["last_completed_scan"])
+	}
+	if completed["id"] != float64(deep.ID) || completed["skill_name"] != deepDiveSkillName || completed["commit"] != "abc123" {
+		t.Errorf("last_completed_scan = %#v", completed)
+	}
+	if completed["finished_at"] == nil {
+		t.Errorf("last_completed_scan.finished_at = nil, want %s", finished)
 	}
 	for _, k := range []string{"metadata", "ecosystems_repo_data", "ecosystems_packages_data", "threat_model"} {
 		if _, ok := row[k]; ok {
@@ -712,8 +724,46 @@ func TestExportRepositories_noScans(t *testing.T) {
 	if rows[0]["last_scan"] != nil {
 		t.Fatalf("last_scan = %#v, want nil", rows[0]["last_scan"])
 	}
+	if rows[0]["last_completed_scan"] != nil {
+		t.Fatalf("last_completed_scan = %#v, want nil", rows[0]["last_completed_scan"])
+	}
 	if rows[0]["findings_count"] != float64(0) {
 		t.Errorf("findings_count = %v, want 0", rows[0]["findings_count"])
+	}
+}
+
+// A repository whose only rows are still queued has a last_scan (recency)
+// but no last_completed_scan: nothing has run, and the old single-field
+// export invited reading the queued row's created_at as a scan date.
+func TestExportRepositories_neverCompleted(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	repo := db.Repository{URL: "https://github.com/example/queued-only", Name: "queued-only"}
+	s.DB.Create(&repo)
+	s.DB.Create(&db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanQueued, SkillName: "security-audit"})
+
+	r := httptest.NewRequest("GET", "/api/v1/repositories", nil)
+	r.Host = testHost
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatalf("status %d, want 200. body=%s", w.Code, w.Body)
+	}
+
+	rows := readJSONL(t, w.Body.String())
+	if len(rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(rows))
+	}
+	last, ok := rows[0]["last_scan"].(map[string]any)
+	if !ok {
+		t.Fatalf("last_scan = %#v, want object", rows[0]["last_scan"])
+	}
+	if last["status"] != string(db.ScanQueued) {
+		t.Errorf("last_scan.status = %v, want queued", last["status"])
+	}
+	if rows[0]["last_completed_scan"] != nil {
+		t.Errorf("last_completed_scan = %#v, want nil for a repo with no done runs", rows[0]["last_completed_scan"])
 	}
 }
 

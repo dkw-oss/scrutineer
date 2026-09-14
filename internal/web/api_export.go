@@ -140,17 +140,28 @@ type repositoryExportRow struct {
 	LastScanCommit     string
 	LastScanCreatedAt  *time.Time
 	LastScanFinishedAt *time.Time
-	FindingsCount      int
+
+	LastCompletedScanID         *uint
+	LastCompletedScanSkillName  string
+	LastCompletedScanCommit     string
+	LastCompletedScanFinishedAt *time.Time
+
+	FindingsCount int
 }
 
 // apiExportRepositories streams the Repositories-tab data set as NDJSON for
-// local automation. The export includes scalar repository columns and a latest
-// scan summary, deliberately omitting metadata, ecosystems caches, and other
-// large text blobs.
+// local automation. The export includes scalar repository columns, the latest
+// scan row in any state (recency) and the latest completed run (the "last
+// scanned" answer), deliberately omitting metadata, ecosystems caches, and
+// other large text blobs.
 func (s *Server) apiExportRepositories(w http.ResponseWriter, r *http.Request) {
 	if !validateExportFormat(w, r) {
 		return
 	}
+	// Each LEFT JOIN costs one correlated subquery per repository row.
+	// Both probe the scans repository_id index and read backwards by id, so
+	// at the current corpus this is noise; revisit as a single
+	// window-function pass if repository counts ever make the export drag.
 	q := s.DB.Table("repositories").
 		Select(`repositories.id,
 			repositories.url,
@@ -168,13 +179,23 @@ func (s *Server) apiExportRepositories(w http.ResponseWriter, r *http.Request) {
 			last_scans."commit" AS last_scan_commit,
 			last_scans.created_at AS last_scan_created_at,
 			last_scans.finished_at AS last_scan_finished_at,
-			(` + deepDiveFindingsCountSQL + `) AS findings_count`).
+			last_completed_scans.id AS last_completed_scan_id,
+			last_completed_scans.skill_name AS last_completed_scan_skill_name,
+			last_completed_scans."commit" AS last_completed_scan_commit,
+			last_completed_scans.finished_at AS last_completed_scan_finished_at,
+			(`+deepDiveFindingsCountSQL+`) AS findings_count`).
 		Joins(`LEFT JOIN scans AS last_scans ON last_scans.id = (
 			SELECT id FROM scans
 			WHERE repository_id = repositories.id
 			ORDER BY id DESC
 			LIMIT 1
 		)`).
+		Joins(`LEFT JOIN scans AS last_completed_scans ON last_completed_scans.id = (
+			SELECT id FROM scans
+			WHERE repository_id = repositories.id AND status = ?
+			ORDER BY id DESC
+			LIMIT 1
+		)`, db.ScanDone).
 		Order("repositories.updated_at desc")
 	streamJSONL(w, q, s.Log, repositoryExport)
 }
@@ -648,33 +669,45 @@ func scanExportSince(q *gorm.DB, since time.Time) *gorm.DB {
 	) >= (?, ?)`, since.Unix(), float64(since.Nanosecond())/float64(time.Second))
 }
 
-// repositoryExport maps a repositoryExportRow to the public JSON object. Repos
-// with no scans emit last_scan: null; scanned repos get a compact scan summary.
+// repositoryExport maps a repositoryExportRow to the public JSON object.
+// last_scan is recency — the newest row in any state, null when the repo has
+// no scans; last_completed_scan is the newest run that reached done, null
+// until one has, so a consumer can tell "something is queued" from "this was
+// last scanned then" without joining the scans export.
 func repositoryExport(row repositoryExportRow) map[string]any {
 	out := map[string]any{
-		"id":             row.ID,
-		"url":            row.URL,
-		"name":           row.Name,
-		"full_name":      row.FullName,
-		"owner":          row.Owner,
-		"languages":      row.Languages,
-		"stars":          row.Stars,
-		"findings_count": row.FindingsCount,
-		"created_at":     row.CreatedAt,
-		"updated_at":     row.UpdatedAt,
+		"id":                  row.ID,
+		"url":                 row.URL,
+		"name":                row.Name,
+		"full_name":           row.FullName,
+		"owner":               row.Owner,
+		"languages":           row.Languages,
+		"stars":               row.Stars,
+		"findings_count":      row.FindingsCount,
+		"created_at":          row.CreatedAt,
+		"updated_at":          row.UpdatedAt,
+		"last_scan":           nil,
+		"last_completed_scan": nil,
 	}
-	if row.LastScanID == nil {
-		out["last_scan"] = nil
-		return out
+	if row.LastScanID != nil {
+		out["last_scan"] = map[string]any{
+			"id":          *row.LastScanID,
+			"kind":        row.LastScanKind,
+			statusKey:     string(row.LastScanStatus),
+			"skill_name":  row.LastScanSkillName,
+			"commit":      row.LastScanCommit,
+			"created_at":  row.LastScanCreatedAt,
+			"finished_at": row.LastScanFinishedAt,
+		}
 	}
-	out["last_scan"] = map[string]any{
-		"id":          *row.LastScanID,
-		"kind":        row.LastScanKind,
-		statusKey:     string(row.LastScanStatus),
-		"skill_name":  row.LastScanSkillName,
-		"commit":      row.LastScanCommit,
-		"created_at":  row.LastScanCreatedAt,
-		"finished_at": row.LastScanFinishedAt,
+	// status is omitted on purpose: it is done by definition.
+	if row.LastCompletedScanID != nil {
+		out["last_completed_scan"] = map[string]any{
+			"id":          *row.LastCompletedScanID,
+			"skill_name":  row.LastCompletedScanSkillName,
+			"commit":      row.LastCompletedScanCommit,
+			"finished_at": row.LastCompletedScanFinishedAt,
+		}
 	}
 	return out
 }

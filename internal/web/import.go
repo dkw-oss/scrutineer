@@ -289,10 +289,9 @@ func (s *Server) importResultWith(tx *gorm.DB, res ingest.Result, repoOverride s
 		SkillName:     res.Tool,
 		Commit:        res.Commit,
 		StartedAt:     &now,
-		FinishedAt:    &now,
 		FindingsCount: len(res.Findings),
 	}
-	scan.StatusPriority = db.StatusPriorityFor(scan.Status)
+	db.StampScanStatus(&scan, now)
 
 	if err := tx.Create(&scan).Error; err != nil {
 		return importedResult{}, err

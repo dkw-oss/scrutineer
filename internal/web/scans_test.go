@@ -513,7 +513,7 @@ func TestResumeScan_noLongerPausedDoesNotEnqueue(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := s.DB.Model(&db.Scan{}).Where("id = ?", scan.ID).
-		Updates(scanStatusUpdates(db.ScanQueued, "", nil, nil)).Error; err != nil {
+		Updates(db.RequeueScanUpdates()).Error; err != nil {
 		t.Fatal(err)
 	}
 

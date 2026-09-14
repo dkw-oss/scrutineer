@@ -3411,7 +3411,6 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 		RepositoryID:         repoID,
 		Kind:                 kind,
 		Status:               db.ScanQueued,
-		StatusPriority:       db.StatusPriorityFor(db.ScanQueued),
 		Model:                opts.Model,
 		Effort:               opts.Effort,
 		SkillID:              &skillID,
@@ -3437,6 +3436,7 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 		SkillsRepoSHA:        s.SkillsRepoSHA,
 		APIToken:             NewAPIToken(),
 	}
+	db.StampScanStatus(&scan, time.Time{})
 	// The opt-out check at the top of this function ran before every field above
 	// was resolved, so re-check it inside the creating transaction: the row is
 	// write-locked from the INSERT until commit, which leaves an opt-out only two
@@ -3466,12 +3466,8 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 	if err := s.Queue.Enqueue(ctx, kind, scan.ID, prio); err != nil {
 		enqueueErr := fmt.Errorf("enqueue scan %d: %w", scan.ID, err)
 		now := time.Now()
-		if markErr := s.DB.Model(&db.Scan{}).Where("id = ?", scan.ID).Updates(map[string]any{
-			"status":          db.ScanFailed,
-			"status_priority": db.StatusPriorityFor(db.ScanFailed),
-			"error":           enqueueErr.Error(),
-			"finished_at":     &now,
-		}).Error; markErr != nil {
+		if markErr := s.DB.Model(&db.Scan{}).Where("id = ?", scan.ID).
+			Updates(db.ScanStatusUpdates(db.ScanFailed, enqueueErr.Error(), now, nil)).Error; markErr != nil {
 			return 0, errors.Join(enqueueErr, fmt.Errorf("mark scan failed: %w", markErr))
 		}
 		return 0, enqueueErr

@@ -516,12 +516,8 @@ func (s *Server) scansPauseQueued(w http.ResponseWriter, r *http.Request) {
 		Distinct().Pluck("repository_id", &repoIDs).Error; err != nil {
 		s.Log.Warn("pause-queued: list affected repositories", "err", err)
 	}
-	res := s.DB.Model(&db.Scan{}).Where("status = ?", db.ScanQueued).Updates(scanStatusUpdates(
-		db.ScanPaused,
-		"paused by user",
-		&now,
-		nil,
-	))
+	res := s.DB.Model(&db.Scan{}).Where("status = ?", db.ScanQueued).
+		Updates(db.ScanStatusUpdates(db.ScanPaused, "paused by user", now, nil))
 	if res.Error != nil {
 		http.Error(w, res.Error.Error(), http.StatusInternalServerError)
 		return
@@ -539,16 +535,6 @@ func (s *Server) scansPauseQueued(w http.ResponseWriter, r *http.Request) {
 	}
 	setFlash(w, Flash{Category: successKey, Title: fmt.Sprintf("%d queued scans paused", res.RowsAffected)})
 	s.redirect(w, r, "/scans?status=paused")
-}
-
-func scanStatusUpdates(status db.ScanStatus, msg string, finishedAt *time.Time, pausedUntil *time.Time) map[string]any {
-	return map[string]any{
-		statusKey:         status,
-		"status_priority": db.StatusPriorityFor(status),
-		errorKey:          msg,
-		"finished_at":     finishedAt,
-		"paused_until":    pausedUntil,
-	}
 }
 
 func (s *Server) bulkResumePaused(base *gorm.DB) ([]db.Scan, error) {
@@ -577,7 +563,7 @@ func (s *Server) bulkResumePaused(base *gorm.DB) ([]db.Scan, error) {
 			Columns: []clause.Column{{Name: "id"}},
 		}).Where("status = ?", db.ScanPaused).
 			Where("repository_id NOT IN (?)", s.optedOutRepoIDs()).
-			Updates(scanStatusUpdates(db.ScanQueued, "", nil, nil))
+			Updates(db.RequeueScanUpdates())
 		if res.Error != nil {
 			return res.Error
 		}
@@ -595,12 +581,8 @@ func (s *Server) bulkResumePaused(base *gorm.DB) ([]db.Scan, error) {
 
 func (s *Server) restorePausedAfterResumeEnqueueFailure(scan db.Scan, err error) error {
 	now := time.Now()
-	return s.DB.Model(&db.Scan{}).Where("id = ? AND status = ?", scan.ID, db.ScanQueued).Updates(scanStatusUpdates(
-		db.ScanPaused,
-		"resume failed: "+err.Error(),
-		&now,
-		scan.PausedUntil,
-	)).Error
+	return s.DB.Model(&db.Scan{}).Where("id = ? AND status = ?", scan.ID, db.ScanQueued).
+		Updates(db.ScanStatusUpdates(db.ScanPaused, "resume failed: "+err.Error(), now, scan.PausedUntil)).Error
 }
 
 func (s *Server) enqueueResumedScan(ctx context.Context, scan db.Scan) error {
@@ -679,7 +661,7 @@ func (s *Server) resumeScan(ctx context.Context, scan *db.Scan) error {
 		return ErrRepoFederationOptOut
 	}
 	res := s.DB.Model(&db.Scan{}).Where("id = ? AND status = ?", scan.ID, db.ScanPaused).
-		Updates(scanStatusUpdates(db.ScanQueued, "", nil, nil))
+		Updates(db.RequeueScanUpdates())
 	if res.Error != nil {
 		return res.Error
 	}
@@ -781,12 +763,7 @@ func (s *Server) cancelScan(scan *db.Scan, reason string) (flippedQueued bool) {
 	// read and this write doesn't get a "cancelled" row while it keeps running.
 	res := s.DB.Model(&db.Scan{}).
 		Where("id = ? AND status IN ?", scan.ID, []db.ScanStatus{db.ScanQueued, db.ScanRunning}).
-		Updates(map[string]any{
-			statusKey:         db.ScanCancelled,
-			"status_priority": db.StatusPriorityFor(db.ScanCancelled),
-			errorKey:          reason,
-			"finished_at":     &now,
-		})
+		Updates(db.ScanStatusUpdates(db.ScanCancelled, reason, now, nil))
 	if res.RowsAffected > 0 {
 		s.settleCancelledScanGroups(scan.ID)
 	}
@@ -857,7 +834,7 @@ func (s *Server) scansCancelAll(w http.ResponseWriter, r *http.Request) {
 	grouped := s.groupedScanIDs("repository_id = ? AND status = ?", repoID, db.ScanQueued)
 	queued := s.DB.Model(&db.Scan{}).
 		Where("repository_id = ? AND status = ?", repoID, db.ScanQueued).
-		Updates(scanStatusUpdates(db.ScanCancelled, worker.CancelledByUser, &now, nil))
+		Updates(db.ScanStatusUpdates(db.ScanCancelled, worker.CancelledByUser, now, nil))
 	if queued.Error != nil {
 		http.Error(w, queued.Error.Error(), http.StatusInternalServerError)
 		return

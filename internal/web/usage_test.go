@@ -273,6 +273,13 @@ func TestUsage_perDay(t *testing.T) {
 	mk("metadata", db.ScanFailed, 0.50, &day2)
 	// queued/running excluded.
 	mk("audit", db.ScanQueued, 0, nil)
+	// A terminal row with no finished_at cannot be placed on a day, so the
+	// breakdown skips it instead of bucketing it on its enqueue day the way
+	// a created_at fallback would. The scan_status helpers make such a row
+	// unwritable in production; this fixture pins the guard anyway. Its
+	// spend still counts in the header totals, which aggregate per skill,
+	// not per day.
+	mk("audit", db.ScanDone, 8.00, nil)
 
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, localReq("GET", "/usage?view=day"))
@@ -298,12 +305,18 @@ func TestUsage_perDay(t *testing.T) {
 	if !strings.Contains(body, "$0.50") {
 		t.Errorf("missing day2 total $0.50")
 	}
-	// Header totals still cover all days.
-	if !strings.Contains(body, "$3.50") {
-		t.Errorf("missing grand total $3.50")
+	// Header totals cover every terminal run, including the one no day row
+	// could place.
+	if !strings.Contains(body, "$11.50") {
+		t.Errorf("missing grand total $11.50")
 	}
-	if !strings.Contains(body, "3 runs") {
-		t.Errorf("missing 3 runs count")
+	if !strings.Contains(body, "4 runs") {
+		t.Errorf("missing 4 runs count")
+	}
+	// The unplaceable row must not surface as a day: its enqueue day is the
+	// fixture's creation time, i.e. today.
+	if today := time.Now().UTC().Format("2006-01-02"); strings.Contains(body, today) {
+		t.Errorf("day table contains %s; a row with no finished_at was bucketed on its enqueue day", today)
 	}
 }
 

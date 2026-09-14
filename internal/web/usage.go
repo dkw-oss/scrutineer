@@ -51,7 +51,7 @@ func (s *Server) usage(w http.ResponseWriter, r *http.Request) {
 	var scans []db.Scan
 	columns := []string{
 		"skill_name", "cost_usd", "turns", "input_tokens", "output_tokens",
-		"cache_read_tokens", "cache_write_tokens", "finished_at", "created_at",
+		"cache_read_tokens", "cache_write_tokens", "finished_at",
 	}
 	if view == "drivers" {
 		columns = append(columns, "id", "repository_id", "model", "profile", "sub_path", "focus_area")
@@ -75,12 +75,15 @@ func (s *Server) usage(w http.ResponseWriter, r *http.Request) {
 		inBy[sc.SkillName] += sc.TotalInputTokens()
 		outBy[sc.SkillName] += sc.OutputTokens
 
-		var day string
-		if sc.FinishedAt != nil {
-			day = sc.FinishedAt.UTC().Format("2006-01-02")
-		} else {
-			day = sc.CreatedAt.UTC().Format("2006-01-02")
+		// Day membership matches /reporting: a run lands on the UTC day it
+		// finished. The status filter above admits only terminal rows, which
+		// always carry finished_at (stamped in internal/db/scan_status.go),
+		// so this guard restates that invariant rather than falling back to
+		// created_at — the enqueue day — for a row that cannot be placed.
+		if sc.FinishedAt == nil {
+			continue
 		}
+		day := sc.FinishedAt.UTC().Format("2006-01-02")
 		costByDay[day] += sc.CostUSD
 		runsByDay[day]++
 		inByDay[day] += sc.TotalInputTokens()

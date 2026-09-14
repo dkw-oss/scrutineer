@@ -67,7 +67,7 @@ func (s *Server) stopScansForOptOut(repoID uint) error {
 		repoID, []db.ScanStatus{db.ScanQueued, db.ScanPaused})
 	if err := s.DB.Model(&db.Scan{}).
 		Where("repository_id = ? AND status IN ?", repoID, []db.ScanStatus{db.ScanQueued, db.ScanPaused}).
-		Updates(scanStatusUpdates(db.ScanCancelled, worker.OptOutCancelReason, &now, nil)).Error; err != nil {
+		Updates(db.ScanStatusUpdates(db.ScanCancelled, worker.OptOutCancelReason, now, nil)).Error; err != nil {
 		return err
 	}
 	s.settleCancelledScanGroups(grouped...)

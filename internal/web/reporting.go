@@ -303,9 +303,12 @@ func (d reportData) inWindow(t *time.Time) bool {
 //
 // Both averages columns are aggregated in the database. Only the totals
 // and the day breakdown need individual rows, and that read is bounded to
-// the selected window and to the columns the report reads, so picking a
-// narrower interval genuinely costs less rather than filtering a full
-// table scan in memory.
+// the selected window and to the columns the report reads. A narrower
+// interval trims what is materialised and carried into Go, not what the
+// database examines: the two-clock disjunction in reportWindowSQL cannot
+// use a single-column index, so every render walks the scans table
+// whatever the interval — fine at the current corpus, worth an index on
+// each clock if scans reach six figures.
 func (s *Server) buildReport(iv reportInterval, minSeverity string) (reportData, error) {
 	now := time.Now().UTC()
 	data := reportData{Interval: iv, MinSeverity: minSeverity, Generated: now}

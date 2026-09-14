@@ -591,3 +591,17 @@ func TestLocationLess(t *testing.T) {
 		}
 	}
 }
+
+// formatScanDate refuses to guess: a scan with no finished_at has no run
+// date, and the dropped created_at fallback would have printed the enqueue
+// day as though the scan had run then.
+func TestFormatScanDateWithoutFinishTimestampRendersADash(t *testing.T) {
+	finished := time.Date(2026, 3, 5, 23, 30, 0, 0, time.UTC)
+	if got := formatScanDate(&db.Scan{FinishedAt: &finished}); got != "2026-03-05" {
+		t.Errorf("formatScanDate = %q, want 2026-03-05", got)
+	}
+	created := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	if got := formatScanDate(&db.Scan{CreatedAt: created}); got != "—" {
+		t.Errorf("formatScanDate with nil FinishedAt = %q, want —", got)
+	}
+}

@@ -275,14 +275,13 @@ func (s *Server) recordScheduledSkip(repo db.Repository, reason string) {
 		}
 	}
 	scan := db.Scan{
-		RepositoryID:   repo.ID,
-		Kind:           scheduleKind,
-		Status:         db.ScanSkipped,
-		StatusPriority: db.StatusPriorityFor(db.ScanSkipped),
-		Error:          reason,
-		StartedAt:      &now,
-		FinishedAt:     &now,
+		RepositoryID: repo.ID,
+		Kind:         scheduleKind,
+		Status:       db.ScanSkipped,
+		Error:        reason,
+		StartedAt:    &now,
 	}
+	db.StampScanStatus(&scan, now)
 	if err := s.DB.Create(&scan).Error; err != nil {
 		s.Log.Error("scheduler: record skip", "repo", repo.Name, "err", err)
 		return
